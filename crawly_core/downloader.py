@@ -163,8 +163,27 @@ def _fetch_and_verify_pdf(
     target_path: Path,
     timeout: int = 20,
     config: Optional[AppConfig] = None,
+    status_callback: Optional[Callable[[str], None]] = None,
 ) -> bool:
+    """Retrieve PDF bytes; report transport status separately from paper identity.
+
+    A successful PDF signature check means only 'pdf_received', never
+    'verified'. Title/author/DOI identity verification is a separate gate.
+    """
+    def note(outcome: str) -> None:
+        if status_callback is not None:
+            status_callback(outcome)
+
+    def http_outcome(code: int) -> str:
+        return {
+            401: "authentication_required",
+            403: "access_denied",
+            404: "not_found",
+            429: "rate_limited",
+        }.get(code, "download_error")
+
     if not url or not url.startswith(("http://", "https://")):
+        note("download_error")
         return False
     cfg = config or AppConfig.load()
     headers = {
@@ -174,6 +193,7 @@ def _fetch_and_verify_pdf(
     try:
         resp = requests.get(url, headers=headers, timeout=timeout, allow_redirects=True, stream=True)
         if resp.status_code != 200:
+            note(http_outcome(resp.status_code))
             return False
 
         chunks = []
@@ -194,6 +214,7 @@ def _fetch_and_verify_pdf(
         if 0 <= pdf_idx <= 1024 and len(content) > 1024:
             target_path.parent.mkdir(parents=True, exist_ok=True)
             target_path.write_bytes(content[pdf_idx:])
+            note("pdf_received")
             return True
 
         ctype = (resp.headers.get("Content-Type") or "").lower()
@@ -212,9 +233,15 @@ def _fetch_and_verify_pdf(
                     if 0 <= idx2 <= 1024 and len(resp2.content) > 1024:
                         target_path.parent.mkdir(parents=True, exist_ok=True)
                         target_path.write_bytes(resp2.content[idx2:])
+                        note("pdf_received")
                         return True
+                else:
+                    note(http_outcome(resp2.status_code))
+                    return False
     except Exception:
+        note("download_error")
         return False
+    note("download_error")
     return False
 
 
