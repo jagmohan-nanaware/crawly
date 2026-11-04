@@ -41,6 +41,7 @@ class CandidateSource:
     pdf_responses: int = 0
     verified_downloads: int = 0
     last_outcome: str = ""
+    last_attempt_utc: str = ""
 
     def __post_init__(self) -> None:
         parsed = urlsplit(self.url.strip())
@@ -75,6 +76,9 @@ def candidates_from_paper(paper: Paper) -> List[CandidateSource]:
     Other project-specific CSV columns are preserved by the Paper model.
     """
     extras = paper.extra_fields
+    document_type = (extras.get("Document Type") or extras.get("Reference Type") or "").strip().lower()
+    if document_type in {"software", "software repository", "source code", "datasheet", "data sheet", "dataset"}:
+        return []
     reference_id = (extras.get("MCS Ref No") or paper.doi or paper.clean_title()).strip()
     urls = [(1, paper.pdf_url, "primary_pdf")]
     for key, value in extras.items():
@@ -177,7 +181,8 @@ class SourceRegistry:
             rows = db.execute("""
                 SELECT reference_id, url, source_type, discovered_via,
                        access_confidence, identity_confidence, expected_cost,
-                       attempts, pdf_responses, verified_downloads, last_outcome
+                       attempts, pdf_responses, verified_downloads, last_outcome,
+                       last_attempt_utc
                   FROM sources WHERE reference_id = ?
             """, (reference_id,)).fetchall()
         sources = [CandidateSource(**dict(row)) for row in rows]
