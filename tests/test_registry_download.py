@@ -6,7 +6,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from crawly_core.downloader import _fetch_and_verify_pdf, download_batch_pdfs, download_paper_pdf
-from crawly_core.models import AppConfig, Paper, load_papers_from_csv
+from crawly_core.models import AppConfig, Paper, load_papers_from_csv, save_papers_to_csv
 from crawly_core.source_registry import SourceRegistry
 
 
@@ -180,6 +180,39 @@ class TestRegisteredAcquisition(unittest.TestCase):
             registry = SourceRegistry(output / "sources.sqlite")
             self.assertEqual(registry.list_sources("1")[0].last_outcome, "rate_limited")
             self.assertEqual(registry.list_sources("2")[0].attempts, 0)
+
+    def test_cli_explicit_registry_flags_reach_download_config(self):
+        from crawly_core.cli import main
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "input.csv"
+            db = Path(directory) / "records.sqlite"
+            save_papers_to_csv([Paper(title="Test")], path)
+            with (
+                patch("crawly_core.cli.AppConfig.load", return_value=AppConfig(ai_provider="extractive")),
+                patch("crawly_core.cli.render_header"),
+                patch("crawly_core.cli.download_batch_pdfs",
+                      return_value={"total": 1, "downloaded": 0, "missing": 1}) as batch,
+            ):
+                self.assertEqual(main([
+                    "download", str(path), "-o", str(Path(directory) / "output"),
+                    "--source-registry", "--registry-db", str(db),
+                ]), 0)
+                config = batch.call_args.kwargs["config"]
+                self.assertTrue(config.use_source_registry)
+                self.assertEqual(config.source_registry_path, str(db))
+
+    def test_transport_success_with_no_callback_will_not_claim_identity(self):
+        with tempfile.TemporaryDirectory() as directory:
+            registry = SourceRegistry(Path(directory) / "sources.sqlite")
+            paper = Paper(title="Title", pdf_url="https://example.edu/doc.pdf",
+                          extra_fields={"MCS Ref No": "10"})
+            with patch("crawly_core.downloader._fetch_and_verify_pdf", return_value=True):
+                result = download_paper_pdf(paper, Path(directory), AppConfig(), registry=registry)
+            self.assertTrue(result[0])
+            source = registry.list_sources("10")[0]
+            self.assertEqual(source.last_outcome, "pdf_received")
+            self.assertEqual(source.verified_downloads, 0)
 
     def test_non_literature_is_skipped_and_no_sources_is_handled(self):
         with tempfile.TemporaryDirectory() as directory:
