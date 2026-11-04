@@ -109,15 +109,22 @@ def candidates_from_paper(paper: Paper) -> List[CandidateSource]:
             extras.get(f"Identity Confidence {number}"),
             extras.get(f"Expected Cost {number}"),
         )
-        access, identity, cost = tuple(
-            float(raw) if raw not in (None, "") else default
-            for raw, default in zip(values, defaults)
-        )
-        candidates.append(CandidateSource(
-            reference_id=reference_id, url=url, source_type=source_type,
-            access_confidence=access, identity_confidence=identity,
-            expected_cost=cost,
-        ))
+        # A malformed alternate URL or CSV score must not abort an entire
+        # bibliography batch. Skip only that candidate; leave source data
+        # unchanged for the researcher to correct later.
+        try:
+            access, identity, cost = tuple(
+                float(raw) if raw not in (None, "") else default
+                for raw, default in zip(values, defaults)
+            )
+            candidate = CandidateSource(
+                reference_id=reference_id, url=url, source_type=source_type,
+                access_confidence=access, identity_confidence=identity,
+                expected_cost=cost,
+            )
+        except (ValueError, TypeError):
+            continue
+        candidates.append(candidate)
     return candidates
 
 
