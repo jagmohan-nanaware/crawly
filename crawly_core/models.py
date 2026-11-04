@@ -380,6 +380,9 @@ class AppConfig:
     default_limit_per_source: int = 10
     default_sort: str = "relevance"
     request_timeout: int = 12
+    # Opt-in: use recorded alternate URLs before normal academic API fallbacks.
+    use_source_registry: bool = False
+    source_registry_path: str = ""
 
     unpaywall_email: str = "crawly.theliteratureassistant@gmail.com"
     semantic_scholar_api_key: str = ""
