@@ -150,8 +150,10 @@ class Paper:
             base = base[:-4]
         if not base:
             base = self.clean_title() or (self.doi.replace("/", "_") if self.doi else "paper")
-        cleaned = re.sub(r'[\\/*?:"<>|\r\n\t]+', " ", base)
+        cleaned = re.sub(r'[\\/*?:"<>|\x00-\x1f\x7f]+', " ", base)
         cleaned = re.sub(r"\s+", " ", cleaned).strip(" ._-")
+        if not cleaned:
+            cleaned = "paper"
         if len(cleaned) > max_len:
             cleaned = cleaned[:max_len].rstrip(" ._-")
         if not cleaned.lower().endswith(".pdf"):
@@ -300,6 +302,10 @@ def save_papers_to_csv(
         for ef in extra_fields:
             if ef not in fieldnames:
                 fieldnames.append(ef)
+    # A download operation rewrites the CSV without passing extra_fields;
+    # preserve previously generated AI summaries instead of dropping them.
+    if any(paper.summary for paper in papers) and "AI Summary" not in fieldnames:
+        fieldnames.append("AI Summary")
     for paper in papers:
         for field_name in paper.extra_fields:
             if field_name and field_name not in fieldnames:
