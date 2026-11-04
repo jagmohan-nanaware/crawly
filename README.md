@@ -234,8 +234,8 @@ Every Pull Request submitted to **crawly: the literature assistant** is verified
 > **Mandatory Pull Request Policy:** All unit tests in [`tests/`](tests/) must pass and total code coverage across `crawly.py`, `downloader.py`, and `crawly_core/*` must be **100%** (`fail_under = 100` in [`.coveragerc`](.coveragerc)). If any test case fails or code coverage drops below 100%, the CI workflow will block the PR and automatically comment on the PR asking the contributor to fix the failing tests or add missing test coverage before it comes to the maintainer for review and merging.
 
 ```bash
-# 1. Install developer, test, and build dependencies
-pip install -r requirements.txt coverage pytest pytest-cov pyinstaller
+# 1. Install Crawly in editable mode, with test and coverage dependencies
+python3 -m pip install -r requirements-dev.txt
 
 # 2. Run the full test suite and enforce 100% code coverage
 python -m coverage run -m unittest discover -s tests -v
@@ -245,7 +245,8 @@ python -m coverage report -m --fail-under=100
 python crawly.py
 python downloader.py
 
-# 4. Rebuild dist/crawly.pyz, launchers, universal zip, and native binary
+# 4. Optional: install PyInstaller when producing a native binary
+python -m pip install pyinstaller
 python build_release.py --native
 ```
 
