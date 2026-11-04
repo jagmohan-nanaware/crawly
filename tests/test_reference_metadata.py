@@ -93,7 +93,7 @@ class TestReferenceMetadataPreservation(unittest.TestCase):
     def test_invalid_filename_is_sanitized_to_safe_basename(self):
         invalid = Paper(title="Title", extra_fields={"Expected Filename": "...pdf"})
         self.assertEqual(invalid.safe_filename(), "paper.pdf")
-        control = Paper(title="Title", extra_fields={"Expected Filename": "ab\\x00cd.pdf"})
+        control = Paper(title="Title", extra_fields={"Expected Filename": "ab" + chr(0) + "cd.pdf"})
         self.assertEqual(control.safe_filename(), "ab cd.pdf")
 
     def test_download_batch_does_not_erase_imported_metadata(self):
