@@ -821,6 +821,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p_dl = sub.add_parser("download", help="Download PDFs for papers in a CSV file (Legal Open Access by default)")
     p_dl.add_argument("csv", help="Path to CSV file (e.g. test_1-2.csv)")
     p_dl.add_argument("-o", "--output-dir", default="", help="Output directory for PDFs (defaults to CSV stem)")
+    p_dl.add_argument("--source-registry", action="store_true", help="Enable persistent multi-source fallback for this download")
+    p_dl.add_argument("--registry-db", default="", help="SQLite source registry path (implies --source-registry)")
     p_dl.add_argument(
         "--enable-scihub",
         action="store_true",
@@ -1045,6 +1047,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     if args.command == "download":
         session_cfg = AppConfig(**config.__dict__)
+        if args.source_registry or args.registry_db:
+            session_cfg.use_source_registry = True
+        if args.registry_db:
+            session_cfg.source_registry_path = args.registry_db
         wants_scihub = bool(args.enable_scihub or args.scihub_url or config.use_scihub_fallback)
         if wants_scihub:
             accepted = prompt_third_party_risk_acceptance(

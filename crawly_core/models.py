@@ -133,15 +133,27 @@ class Paper:
     local_pdf: str = ""
     download_source: str = ""
     summary: str = ""
+    # Preserve project-specific CSV columns across Crawly search and download runs.
+    # Examples: MCS Ref No, MCS Sections, Expected Filename, Source URL 2.
+    extra_fields: Dict[str, str] = field(default_factory=dict)
 
     def clean_title(self) -> str:
         t = re.sub(r"\[(BOOK|HTML|B|PDF|CITATION|DOC)\]", "", str(self.title), flags=re.IGNORECASE)
         return re.sub(r"\s+", " ", t).strip()
 
     def safe_filename(self, max_len: int = 120) -> str:
-        base = self.clean_title() or (self.doi.replace("/", "_") if self.doi else "paper")
-        cleaned = re.sub(r'[\\/*?:"<>|\r\n\t]+', " ", base)
+        # An imported reference can supply a stable, non-colliding file name.
+        # Strip directory components so CSV values cannot escape output_dir.
+        preferred = (self.extra_fields.get("Expected Filename") or "").strip()
+        base = re.split(r"[\\\\/]", preferred)[-1] if preferred else ""
+        if base.lower().endswith(".pdf"):
+            base = base[:-4]
+        if not base:
+            base = self.clean_title() or (self.doi.replace("/", "_") if self.doi else "paper")
+        cleaned = re.sub(r'[\\/*?:"<>|\x00-\x1f\x7f]+', " ", base)
         cleaned = re.sub(r"\s+", " ", cleaned).strip(" ._-")
+        if not cleaned:
+            cleaned = "paper"
         if len(cleaned) > max_len:
             cleaned = cleaned[:max_len].rstrip(" ._-")
         if not cleaned.lower().endswith(".pdf"):
@@ -194,7 +206,7 @@ class Paper:
         self.summary = val
 
     def to_csv_row(self) -> Dict[str, Any]:
-        return {
+        row = {
             "Paper Title": self.clean_title(),
             "Year": int(self.year) if str(self.year).isdigit() else 0,
             "Author": self.authors or "Unknown",
@@ -208,6 +220,11 @@ class Paper:
             "Local PDF": self.local_pdf or "",
             "Download Source": self.download_source or "",
         }
+        # Crawly-owned columns take precedence over imported extra columns.
+        for key, value in self.extra_fields.items():
+            if key and key not in row:
+                row[key] = value
+        return row
 
     @classmethod
     def from_csv_row(cls, row: Dict[str, Any]) -> "Paper":
@@ -227,6 +244,17 @@ class Paper:
 
         title = _str(row.get("Paper Title") or row.get("title") or row.get("Title"), "Untitled")
         title = re.sub(r"\[(BOOK|HTML|B|PDF)\]", "", title, flags=re.IGNORECASE).strip()
+        known = set(CSV_FIELDNAMES) | {
+            "title", "Title", "year", "Authors", "authors", "Venue",
+            "publication", "Paper URL", "url", "doi", "pdf_url",
+            "abstract", "citations", "source", "local_pdf",
+            "download_source", "Summary", "AI Summary", "summary",
+        }
+        extras = {
+            str(key): "" if value is None else str(value)
+            for key, value in row.items()
+            if key is not None and key not in known
+        }
         return cls(
             title=title,
             year=_int(row.get("Year") or row.get("year"), 0),
@@ -241,6 +269,7 @@ class Paper:
             local_pdf=_str(row.get("Local PDF") or row.get("local_pdf"), ""),
             download_source=_str(row.get("Download Source") or row.get("download_source"), ""),
             summary=_str(row.get("Summary") or row.get("AI Summary") or row.get("summary"), ""),
+            extra_fields=extras,
         )
 
 
@@ -273,6 +302,14 @@ def save_papers_to_csv(
         for ef in extra_fields:
             if ef not in fieldnames:
                 fieldnames.append(ef)
+    # A download operation rewrites the CSV without passing extra_fields;
+    # preserve previously generated AI summaries instead of dropping them.
+    if any(paper.summary for paper in papers) and "AI Summary" not in fieldnames:
+        fieldnames.append("AI Summary")
+    for paper in papers:
+        for field_name in paper.extra_fields:
+            if field_name and field_name not in fieldnames:
+                fieldnames.append(field_name)
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8", newline="") as fh:
         writer = csv.DictWriter(fh, fieldnames=fieldnames, extrasaction="ignore")
@@ -343,6 +380,9 @@ class AppConfig:
     default_limit_per_source: int = 10
     default_sort: str = "relevance"
     request_timeout: int = 12
+    # Opt-in: use recorded alternate URLs before normal academic API fallbacks.
+    use_source_registry: bool = False
+    source_registry_path: str = ""
 
     unpaywall_email: str = "crawly.theliteratureassistant@gmail.com"
     semantic_scholar_api_key: str = ""

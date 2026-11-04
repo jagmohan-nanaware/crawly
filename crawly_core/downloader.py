@@ -13,6 +13,7 @@ import requests
 from bs4 import BeautifulSoup
 
 from .models import DEFAULT_API_ENDPOINTS, AppConfig, Paper, save_papers_to_csv
+from .source_registry import CandidateSource, SourceRegistry, is_excluded_reference
 from .sources import get_browser_headers, get_polite_headers, normalize_doi, reconstruct_openalex_abstract
 
 
@@ -163,8 +164,27 @@ def _fetch_and_verify_pdf(
     target_path: Path,
     timeout: int = 20,
     config: Optional[AppConfig] = None,
+    status_callback: Optional[Callable[[str], None]] = None,
 ) -> bool:
+    """Retrieve PDF bytes; report transport status separately from paper identity.
+
+    A successful PDF signature check means only 'pdf_received', never
+    'verified'. Title/author/DOI identity verification is a separate gate.
+    """
+    def note(outcome: str) -> None:
+        if status_callback is not None:
+            status_callback(outcome)
+
+    def http_outcome(code: int) -> str:
+        return {
+            401: "authentication_required",
+            403: "access_denied",
+            404: "not_found",
+            429: "rate_limited",
+        }.get(code, "download_error")
+
     if not url or not url.startswith(("http://", "https://")):
+        note("download_error")
         return False
     cfg = config or AppConfig.load()
     headers = {
@@ -174,6 +194,7 @@ def _fetch_and_verify_pdf(
     try:
         resp = requests.get(url, headers=headers, timeout=timeout, allow_redirects=True, stream=True)
         if resp.status_code != 200:
+            note(http_outcome(resp.status_code))
             return False
 
         chunks = []
@@ -194,6 +215,7 @@ def _fetch_and_verify_pdf(
         if 0 <= pdf_idx <= 1024 and len(content) > 1024:
             target_path.parent.mkdir(parents=True, exist_ok=True)
             target_path.write_bytes(content[pdf_idx:])
+            note("pdf_received")
             return True
 
         ctype = (resp.headers.get("Content-Type") or "").lower()
@@ -212,9 +234,15 @@ def _fetch_and_verify_pdf(
                     if 0 <= idx2 <= 1024 and len(resp2.content) > 1024:
                         target_path.parent.mkdir(parents=True, exist_ok=True)
                         target_path.write_bytes(resp2.content[idx2:])
+                        note("pdf_received")
                         return True
+                else:
+                    note(http_outcome(resp2.status_code))
+                    return False
     except Exception:
+        note("download_error")
         return False
+    note("download_error")
     return False
 
 
@@ -359,14 +387,116 @@ def _try_scihub_download(
     return None
 
 
+
+def _download_from_registry(
+    paper: Paper,
+    target_path: Path,
+    cfg: AppConfig,
+    registry: SourceRegistry,
+    blocked_hosts: set[str],
+    custom_scihub_url: Optional[str],
+) -> Tuple[bool, str, Optional[Path]]:
+    """Try recorded sources first, then discover OA fallback sources.
+
+    A PDF-header match is recorded as 'pdf_received' (not 'verified').
+    Full document identity verification will be implemented separately.
+    """
+    ref_id = (paper.extra_fields.get("MCS Ref No") or paper.doi or paper.clean_title()).strip()
+    registry.import_paper(paper)
+    tried: set[str] = set()
+
+    def try_sources(include_landing: bool = False) -> Tuple[bool, str, Optional[Path]]:
+        for candidate in registry.list_sources(ref_id):
+            # A publisher landing page can expose an access barrier. Prefer
+            # official OA metadata discovery before requesting landing pages.
+            if candidate.source_type == "landing_page" and not include_landing:
+                continue
+            if candidate.url in tried:
+                continue
+            host = urllib.parse.urlparse(candidate.url).hostname or ""
+            if host.lower() in blocked_hosts:
+                continue
+            tried.add(candidate.url)
+            outcomes: List[str] = []
+            ok = _fetch_and_verify_pdf(
+                candidate.url,
+                target_path,
+                timeout=cfg.request_timeout + 8,
+                config=cfg,
+                status_callback=outcomes.append,
+            )
+            outcome = outcomes[-1] if outcomes else ("pdf_received" if ok else "download_error")
+            registry.record_attempt(ref_id, candidate.url, outcome)
+            if outcome in ("rate_limited", "access_denied", "authentication_required"):
+                blocked_hosts.add(host.lower())
+            if ok:
+                paper.local_pdf = str(target_path)
+                label = candidate.discovered_via if candidate.discovered_via != "csv" else candidate.source_type
+                paper.download_source = f"Registry: {label}"
+                return True, paper.download_source, target_path
+        return False, "Not Found", None
+
+    first = try_sources()
+    if first[0]:
+        return first
+
+    resolve_paper_metadata(paper, timeout=cfg.request_timeout, config=cfg)
+    discovered = _candidate_publisher_oa_urls(paper)
+    if paper.doi:
+        discovered.extend(_candidate_unpaywall_urls(
+            paper.doi, cfg.unpaywall_email, timeout=cfg.request_timeout, config=cfg
+        ))
+        discovered.extend(_candidate_semantic_scholar_urls(
+            paper, api_key=cfg.semantic_scholar_api_key, timeout=cfg.request_timeout, config=cfg
+        ))
+    discovered.extend(_candidate_europe_pmc_urls(
+        paper, timeout=cfg.request_timeout, config=cfg
+    ))
+
+    known_urls = {source.url for source in registry.list_sources(ref_id)}
+    for label, url in discovered:
+        if not url or url in known_urls:
+            continue
+        registry.upsert(CandidateSource(
+            reference_id=ref_id, url=url,
+            source_type="discovered_oa", discovered_via=label,
+        ))
+        known_urls.add(url)
+
+    second = try_sources(include_landing=True)
+    if second[0]:
+        return second
+
+    if cfg.use_scihub_fallback or custom_scihub_url:
+        mirrors = list(cfg.scihub_mirrors)
+        if custom_scihub_url:
+            clean_m = custom_scihub_url.strip().rstrip("/")
+            if clean_m and clean_m not in mirrors:
+                mirrors.insert(0, clean_m)
+        source = _try_scihub_download(
+            paper, target_path, mirrors=mirrors,
+            timeout=cfg.request_timeout + 8, config=cfg,
+        )
+        if source:
+            paper.local_pdf = str(target_path)
+            paper.download_source = source
+            return True, source, target_path
+
+    return False, "Not Found", None
+
+
 def download_paper_pdf(
     paper: Paper,
     output_dir: Path,
     config: Optional[AppConfig] = None,
     custom_scihub_url: Optional[str] = None,
+    registry: Optional[SourceRegistry] = None,
+    blocked_hosts: Optional[set[str]] = None,
 ) -> Tuple[bool, str, Optional[Path]]:
     cfg = config or AppConfig.load()
     output_dir.mkdir(parents=True, exist_ok=True)
+    if registry is not None and is_excluded_reference(paper):
+        return False, "Excluded document type", None
     target_path = output_dir / paper.safe_filename()
 
     if target_path.exists() and target_path.stat().st_size > 1024:
@@ -379,6 +509,13 @@ def download_paper_pdf(
                 return True, paper.download_source, target_path
         except Exception:
             pass
+
+    if registry is not None:
+        return _download_from_registry(
+            paper, target_path, cfg, registry,
+            blocked_hosts if blocked_hosts is not None else set(),
+            custom_scihub_url,
+        )
 
     resolve_paper_metadata(paper, timeout=cfg.request_timeout, config=cfg)
 
@@ -438,19 +575,26 @@ def download_batch_pdfs(
 
     downloaded = 0
     not_found_rows: List[Dict[str, str]] = []
+    skipped = 0
     by_source: Dict[str, int] = {}
 
+    registry = SourceRegistry(cfg.source_registry_path or (out_path / "sources.sqlite")) if cfg.use_source_registry else None
+    blocked_hosts: set[str] = set()
     total = len(papers)
     for idx, paper in enumerate(papers, start=1):
+        kwargs = {"registry": registry, "blocked_hosts": blocked_hosts} if registry is not None else {}
         ok, src, _ = download_paper_pdf(
             paper,
             output_dir=out_path,
             config=cfg,
             custom_scihub_url=custom_scihub_url,
+            **kwargs,
         )
         if ok:
             downloaded += 1
             by_source[src] = by_source.get(src, 0) + 1
+        elif src == "Excluded document type" and registry is not None:
+            skipped += 1
         else:
             not_found_rows.append(
                 {
@@ -474,12 +618,15 @@ def download_batch_pdfs(
         except Exception:
             pass
 
-    return {
+    stats = {
         "total": total,
         "downloaded": downloaded,
-        "missing": total - downloaded,
+        "missing": len(not_found_rows),
         **by_source,
     }
+    if registry is not None:
+        stats["skipped"] = skipped
+    return stats
 
 
 def sync_dataset_to_zotero(
