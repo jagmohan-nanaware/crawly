@@ -571,6 +571,7 @@ def download_batch_pdfs(
 
     downloaded = 0
     not_found_rows: List[Dict[str, str]] = []
+    skipped = 0
     by_source: Dict[str, int] = {}
 
     registry = SourceRegistry(cfg.source_registry_path or (out_path / "sources.sqlite")) if cfg.use_source_registry else None
@@ -588,6 +589,8 @@ def download_batch_pdfs(
         if ok:
             downloaded += 1
             by_source[src] = by_source.get(src, 0) + 1
+        elif src == "Excluded document type" and registry is not None:
+            skipped += 1
         else:
             not_found_rows.append(
                 {
@@ -611,12 +614,15 @@ def download_batch_pdfs(
         except Exception:
             pass
 
-    return {
+    stats = {
         "total": total,
         "downloaded": downloaded,
-        "missing": total - downloaded,
+        "missing": len(not_found_rows),
         **by_source,
     }
+    if registry is not None:
+        stats["skipped"] = skipped
+    return stats
 
 
 def sync_dataset_to_zotero(
