@@ -68,6 +68,12 @@ class CandidateSource:
         return access * identity / self.expected_cost
 
 
+def is_excluded_reference(paper: Paper) -> bool:
+    """Only explicitly classified non-literature references are excluded."""
+    kind = (paper.extra_fields.get("Document Type") or paper.extra_fields.get("Reference Type") or "").strip().lower()
+    return kind in {"software", "software repository", "source code", "datasheet", "data sheet", "dataset"}
+
+
 def candidates_from_paper(paper: Paper) -> List[CandidateSource]:
     """Extract the primary and numbered alternate URLs from Crawly's CSV model.
 
@@ -76,8 +82,7 @@ def candidates_from_paper(paper: Paper) -> List[CandidateSource]:
     Other project-specific CSV columns are preserved by the Paper model.
     """
     extras = paper.extra_fields
-    document_type = (extras.get("Document Type") or extras.get("Reference Type") or "").strip().lower()
-    if document_type in {"software", "software repository", "source code", "datasheet", "data sheet", "dataset"}:
+    if is_excluded_reference(paper):
         return []
     reference_id = (extras.get("MCS Ref No") or paper.doi or paper.clean_title()).strip()
     urls = [(1, paper.pdf_url, "primary_pdf")]
