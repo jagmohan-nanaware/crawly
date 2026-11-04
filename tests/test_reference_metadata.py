@@ -61,6 +61,16 @@ class TestReferenceMetadataPreservation(unittest.TestCase):
         paper.extra_fields["Expected Filename"] = "..\\..\\dangerous\\owned.pdf"
         self.assertEqual(paper.safe_filename(), "owned.pdf")
 
+    def test_regular_crawly_csv_remains_compatible(self):
+        with tempfile.TemporaryDirectory() as directory:
+            csv_path = Path(directory) / "ordinary.csv"
+            original = Paper(title="Original", abstract="Database abstract", pdf_url="https://example.org/p.pdf")
+            save_papers_to_csv([original], csv_path)
+            reread = load_papers_from_csv(csv_path)[0]
+            self.assertEqual(reread.extra_fields, {})
+            self.assertEqual(reread.abstract, "Database abstract")
+            self.assertEqual(reread.safe_filename(), "Original.pdf")
+
     def test_download_batch_does_not_erase_imported_metadata(self):
         with tempfile.TemporaryDirectory() as directory:
             source = Path(directory) / "batch.csv"
