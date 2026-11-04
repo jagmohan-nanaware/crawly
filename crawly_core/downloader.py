@@ -405,8 +405,12 @@ def _download_from_registry(
     registry.import_paper(paper)
     tried: set[str] = set()
 
-    def try_sources() -> Tuple[bool, str, Optional[Path]]:
+    def try_sources(include_landing: bool = False) -> Tuple[bool, str, Optional[Path]]:
         for candidate in registry.list_sources(ref_id):
+            # A publisher landing page can expose an access barrier. Prefer
+            # official OA metadata discovery before requesting landing pages.
+            if candidate.source_type == "landing_page" and not include_landing:
+                continue
             if candidate.url in tried:
                 continue
             host = urllib.parse.urlparse(candidate.url).hostname or ""
@@ -459,7 +463,7 @@ def _download_from_registry(
         ))
         known_urls.add(url)
 
-    second = try_sources()
+    second = try_sources(include_landing=True)
     if second[0]:
         return second
 
