@@ -143,6 +143,53 @@ class TestRegisteredAcquisition(unittest.TestCase):
             self.assertTrue(cached[0])
             second_fetch.assert_not_called()
 
+    def test_publisher_landing_is_deferred_until_after_oa_lookup(self):
+        with tempfile.TemporaryDirectory() as directory:
+            registry = SourceRegistry(Path(directory) / "registry.sqlite")
+            paper = Paper(
+                title="Article with publisher landing page",
+                doi="10.1000/defer",
+                url="https://publisher.example.org/landing",
+                extra_fields={"MCS Ref No": "100"},
+            )
+            attempted = []
+            def fake_fetch(url, path, **kwargs):
+                attempted.append(url)
+                success = url == "https://repository.example.edu/open.pdf"
+                kwargs["status_callback"]("pdf_received" if success else "access_denied")
+                return success
+            with (
+                patch("crawly_core.downloader._fetch_and_verify_pdf", side_effect=fake_fetch),
+                patch("crawly_core.downloader.resolve_paper_metadata") as resolve,
+                patch("crawly_core.downloader._candidate_unpaywall_urls",
+                      return_value=[("Unpaywall OA", "https://repository.example.edu/open.pdf")]),
+                patch("crawly_core.downloader._candidate_semantic_scholar_urls", return_value=[]),
+                patch("crawly_core.downloader._candidate_europe_pmc_urls", return_value=[]),
+            ):
+                result = download_paper_pdf(paper, Path(directory), AppConfig(), registry=registry)
+            self.assertTrue(result[0])
+            self.assertEqual(attempted, ["https://repository.example.edu/open.pdf"])
+            resolve.assert_called_once()
+
+    def test_landing_page_is_eventually_tried_when_no_other_source(self):
+        with tempfile.TemporaryDirectory() as directory:
+            registry = SourceRegistry(Path(directory) / "registry.sqlite")
+            paper = Paper(
+                title="Article", url="https://repository.example.edu/landing",
+                extra_fields={"MCS Ref No": "300"},
+            )
+            with (
+                patch("crawly_core.downloader.resolve_paper_metadata") as resolve,
+                patch("crawly_core.downloader._candidate_europe_pmc_urls", return_value=[]),
+                patch("crawly_core.downloader._fetch_and_verify_pdf",
+                      side_effect=lambda url, target, **kw: (kw["status_callback"]("pdf_received"), True)[1]) as fetch,
+            ):
+                result = download_paper_pdf(paper, Path(directory), AppConfig(), registry=registry)
+            self.assertTrue(result[0])
+            resolve.assert_called_once()
+            self.assertEqual(fetch.call_count, 1)
+            self.assertEqual(registry.list_sources("300")[0].last_outcome, "pdf_received")
+
     def test_missing_primary_uses_discovered_open_access(self):
         with tempfile.TemporaryDirectory() as directory:
             registry = SourceRegistry(Path(directory) / "sources.sqlite")
