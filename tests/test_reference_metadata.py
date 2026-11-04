@@ -71,6 +71,31 @@ class TestReferenceMetadataPreservation(unittest.TestCase):
             self.assertEqual(reread.abstract, "Database abstract")
             self.assertEqual(reread.safe_filename(), "Original.pdf")
 
+    def test_existing_ai_summary_is_preserved_when_download_rewrites_csv(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "existing_summary.csv"
+            paper = Paper(
+                title="Research article",
+                abstract="Original retrieved abstract",
+                summary="Previously generated reading notes",
+                extra_fields={"MCS Ref No": "753", "MCS Sections": "1; 2"},
+            )
+            save_papers_to_csv([paper], path)
+            loaded = load_papers_from_csv(path)[0]
+            self.assertEqual(loaded.summary, "Previously generated reading notes")
+            self.assertEqual(loaded.abstract, "Original retrieved abstract")
+            with patch("crawly_core.downloader.download_paper_pdf", return_value=(False, "Not Found", None)):
+                download_batch_pdfs([loaded], directory, csv_path=path)
+            again = load_papers_from_csv(path)[0]
+            self.assertEqual(again.summary, paper.summary)
+            self.assertEqual(again.extra_fields, paper.extra_fields)
+
+    def test_invalid_filename_is_sanitized_to_safe_basename(self):
+        invalid = Paper(title="Title", extra_fields={"Expected Filename": "...pdf"})
+        self.assertEqual(invalid.safe_filename(), "paper.pdf")
+        control = Paper(title="Title", extra_fields={"Expected Filename": "ab\\x00cd.pdf"})
+        self.assertEqual(control.safe_filename(), "ab cd.pdf")
+
     def test_download_batch_does_not_erase_imported_metadata(self):
         with tempfile.TemporaryDirectory() as directory:
             source = Path(directory) / "batch.csv"
