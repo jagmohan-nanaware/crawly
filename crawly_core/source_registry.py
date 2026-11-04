@@ -9,6 +9,7 @@ from __future__ import annotations
 import math
 import re
 import sqlite3
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -136,10 +137,15 @@ class SourceRegistry:
                 )
             """)
 
-    def _connect(self) -> sqlite3.Connection:
+    @contextmanager
+    def _connect(self):
         db = sqlite3.connect(str(self.db_path), timeout=30)
         db.row_factory = sqlite3.Row
-        return db
+        try:
+            with db:
+                yield db
+        finally:
+            db.close()
 
     def upsert(self, candidate: CandidateSource) -> None:
         """Update metadata without resetting earlier download observations."""
