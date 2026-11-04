@@ -75,6 +75,25 @@ class TestRegisteredAcquisition(unittest.TestCase):
             self.assertEqual(outcomes.pop(), "pdf_received")
             self.assertEqual(len(outcomes), 0)
 
+    def test_bad_csv_candidate_does_not_abort_batch(self):
+        from crawly_core.source_registry import candidates_from_paper
+
+        paper = Paper(
+            title="A study", pdf_url="NA",
+            extra_fields={
+                "MCS Ref No": "40",
+                "Source URL 2": "https://author.edu/valid.pdf",
+                "Source URL 3": "file:///etc/passwd",
+                "Source URL 4": "https://author.edu/invalid-score.pdf",
+                "Access Confidence 4": "not-a-number",
+                "Source URL 5": "https://author.edu/bad-range.pdf",
+                "Identity Confidence 5": "1.5",
+            },
+        )
+        candidates = candidates_from_paper(paper)
+        self.assertEqual(len(candidates), 1)
+        self.assertEqual(candidates[0].url, "https://author.edu/valid.pdf")
+
     def test_registry_tried_before_metadata_api_and_persisted(self):
         with tempfile.TemporaryDirectory() as directory:
             cfg = AppConfig(use_source_registry=True, source_registry_path=str(Path(directory) / "sources.db"))
