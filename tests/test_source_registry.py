@@ -102,6 +102,7 @@ class TestSourceRegistry(unittest.TestCase):
             self.assertEqual(saved.pdf_responses, 3)
             self.assertEqual(saved.verified_downloads, 1)
             self.assertEqual(saved.last_outcome, "verified")
+            self.assertTrue(saved.last_attempt_utc.endswith("+00:00"))
             self.assertLess(saved.priority_score, source.priority_score)
             registry.upsert(CandidateSource(
                 "753", url, source_type="institutional", discovered_via="openalex",
@@ -118,6 +119,28 @@ class TestSourceRegistry(unittest.TestCase):
                 registry.record_attempt("753", url, "unknown_status")
             with self.assertRaises(KeyError):
                 registry.record_attempt("753", "https://missing.org/other.pdf", "not_found")
+
+    def test_ignored_document_types_are_not_download_candidates(self):
+        for kind in ("software", "software repository", "source code", "datasheet",
+                     "data sheet", "dataset"):
+            paper = Paper(
+                title="Not a paper",
+                pdf_url="https://example.org/data.pdf",
+                extra_fields={"Document Type": kind.upper()},
+            )
+            self.assertEqual(candidates_from_paper(paper), [])
+        reference = Paper(
+            title="A software project",
+            pdf_url="https://example.org/project.pdf",
+            extra_fields={"Reference Type": "Software Repository"},
+        )
+        self.assertEqual(candidates_from_paper(reference), [])
+        book_chapter = Paper(
+            title="A book chapter",
+            pdf_url="https://example.org/legitimate-chapter.pdf",
+            extra_fields={"Document Type": "book chapter"},
+        )
+        self.assertEqual(len(candidates_from_paper(book_chapter)), 1)
 
     def test_reference_fallback_and_empty_paper(self):
         by_doi = Paper(title="Demo", doi="10.1000/abc",
