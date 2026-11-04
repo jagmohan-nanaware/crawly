@@ -241,6 +241,13 @@ class TestRegisteredAcquisition(unittest.TestCase):
                              extra_fields={"Document Type": "DATASHEET"})
             skipped = download_paper_pdf(excluded, Path(directory), cfg, registry=registry)
             self.assertEqual(skipped[1], "Excluded document type")
+            stats = download_batch_pdfs([excluded], Path(directory) / "skip", config=AppConfig(
+                use_source_registry=True,
+            ))
+            self.assertEqual(stats["skipped"], 1)
+            self.assertEqual(stats["missing"], 0)
+            self.assertEqual(stats["downloaded"], 0)
+            self.assertEqual(stats["total"], 1)
 
             empty = Paper(title="No source", url="NA",
                           extra_fields={"MCS Ref No": "500"})
