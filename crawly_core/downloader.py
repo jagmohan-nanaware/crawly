@@ -18,6 +18,7 @@ from bs4 import BeautifulSoup
 from .models import DEFAULT_API_ENDPOINTS, AppConfig, Paper, save_papers_to_csv
 from .identity import assess_pdf_identity
 from .discovery import discover_oa_sources
+from .repository_discovery import discover_repository_sources
 from .source_registry import CandidateSource, SourceRegistry, is_excluded_reference
 from .sources import get_browser_headers, get_polite_headers, normalize_doi, reconstruct_openalex_abstract
 
@@ -566,6 +567,13 @@ def _download_from_registry(
     second = try_sources(include_landing=True)
     if second[0]:
         return second
+
+    # Independent institutional/author discovery is deliberately attempted
+    # only after the recorded and conventional OA sources have failed.
+    discover_repository_sources(paper, cfg, registry, ref_id, blocked_providers)
+    third = try_sources(include_landing=True)
+    if third[0]:
+        return third
 
     if cfg.use_scihub_fallback or custom_scihub_url:
         mirrors = list(cfg.scihub_mirrors)
