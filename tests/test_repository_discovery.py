@@ -175,6 +175,7 @@ class TestRepositoryDiscovery(unittest.TestCase):
                     {"title": "Computer vision unrelated paper", "url": "https://x.org/wrong.pdf"},
                     {"title": TITLE, "url": "not a URL"},
                     {"title": TITLE, "url": ""},
+                    {"title": TITLE, "url": 42},
                     "bad",
                 ]}
             }) as get:
