@@ -293,6 +293,20 @@ class TestColdstartDiscovery(unittest.TestCase):
         self.assertNotIn("https://attacker.example.com/works/W123.pdf",
                          [p.url for p in bad_host])
 
+    def test_invalid_openalex_archive_candidate_does_not_abort_discovery(self):
+        archive_only = {
+            "has_content": {"pdf": True},
+            "content_urls": {"pdf": "https://content.openalex.org/works/W999.pdf"},
+            "open_access": {"is_oa": True},
+        }
+        with (
+            patch.dict("os.environ", {"OPENALEX_API_KEY": "private-key"}),
+            patch("crawly_core.discovery.CandidateSource", side_effect=ValueError("bad")),
+        ):
+            collected = []
+            _add_openalex_locations(archive_only, "158", collected)
+        self.assertEqual(collected, [])
+
     def test_openalex_archive_download_adds_key_only_for_trusted_host(self):
         from crawly_core.downloader import _fetch_and_verify_pdf
         output = Path(self.tmp.name) / "archive.pdf"
