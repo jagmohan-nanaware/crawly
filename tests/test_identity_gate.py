@@ -80,7 +80,7 @@ class TestBibliographicIdentity(unittest.TestCase):
         p = Paper(self.title, authors="Steve Vestal")
         self.assertEqual(assess_pdf_identity(p, path).status, "verified")
 
-    def test_needs_review_when_title_or_author_or_year_insufficient(self):
+    def test_needs_review_when_title_or_author_insufficient(self):
         path = self.root / "missing_author.pdf"
         make_pdf(path, self.title + " 2007", self.title)
         a = assess_pdf_identity(self.paper, path)
@@ -89,7 +89,54 @@ class TestBibliographicIdentity(unittest.TestCase):
         make_pdf(path, "Completely unreadable article introduction", "Generic PDF")
         self.assertEqual(assess_pdf_identity(self.paper, path).status, "needs_review")
         make_pdf(path, self.title + " Steve Vestal", self.title, "Steve Vestal")
-        self.assertEqual(assess_pdf_identity(self.paper, path).status, "needs_review")
+        decision = assess_pdf_identity(self.paper, path)
+        self.assertEqual(decision.status, "verified")
+        self.assertEqual(decision.evidence["reason"], "exact_header_title_and_author_only")
+        self.assertFalse(decision.evidence["year_found"])
+        self.assertFalse(decision.evidence["doi_found"])
+
+    def test_exact_first_page_title_and_author_without_year_or_doi(self):
+        cases = [
+            (
+                Paper(
+                    "Multicore operating-system support for mixed criticality",
+                    authors="J.H. Anderson, S.K. Baruah and B.B. Brandenburg",
+                    year=2009,
+                ),
+                "Multicore Operating-System Support for Mixed Criticality "
+                "James H. Anderson, Sanjoy K. Baruah, and Bjorn B. Brandenburg",
+            ),
+            (
+                Paper(
+                    "Mixed criticality on controller area network",
+                    authors="A. Burns and R.I. Davis",
+                    year=2013, doi="10.1109/ECRTS.2013.23",
+                ),
+                "Mixed Criticality on Controller Area Network "
+                "A. Burns Department of Computer Science University of York R.I. Davis",
+            ),
+        ]
+        for idx, (paper, first_page) in enumerate(cases):
+            with self.subTest(idx=idx):
+                path = self.root / f"header-{idx}.pdf"
+                make_pdf(path, first_page)
+                assessment = assess_pdf_identity(paper, path)
+                self.assertEqual(assessment.status, "verified")
+                self.assertEqual(assessment.evidence["reason"], "exact_header_title_and_author_only")
+                self.assertTrue(assessment.evidence["title_header_found"])
+                self.assertTrue(assessment.evidence["author_header_found"])
+                self.assertFalse(assessment.evidence["year_found"])
+                self.assertFalse(assessment.evidence["doi_found"])
+
+    def test_citation_in_body_is_not_an_exact_header_identity(self):
+        path = self.root / "late_citation.pdf"
+        # A cited work title and surname in a later paragraph do not establish
+        # that the PDF itself is the bibliography's target.
+        make_pdf(path, "Introduction " + ("other text " * 350) +
+                 self.title + " Steve Vestal")
+        assessment = assess_pdf_identity(self.paper, path)
+        self.assertEqual(assessment.status, "needs_review")
+        self.assertFalse(assessment.evidence["title_header_found"])
 
     def test_similar_variant_title_is_review_not_mismatch(self):
         path = self.root / "minor_variant.pdf"
