@@ -136,11 +136,15 @@ def _discover_openalex(
     paper: Paper, cfg: AppConfig, registry: SourceRegistry, ref_id: str,
 ) -> List[CandidateSource]:
     url = cfg.api_endpoints.get("openalex_works", DEFAULT_API_ENDPOINTS["openalex_works"]).rstrip("/")
+    payload = None
+    items: List[dict] = []
     if paper.doi:
         endpoint = f"{url}/https://doi.org/{quote(normalize_doi(paper.doi), safe='/')}"
         payload = _get_json(registry, ref_id, "OpenAlex", endpoint, None, cfg)
-        items = [payload] if payload else []
-    else:
+        if payload and _matching_paper(paper, payload, "openalex"):
+            items = [payload]
+    # A stale/bad DOI or DOI-lookup failure must not suppress title discovery.
+    if not items:
         payload = _get_json(
             registry, ref_id, "OpenAlex", url,
             {"search": paper.clean_title(), "per-page": 5}, cfg,
