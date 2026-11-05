@@ -61,3 +61,25 @@ Identity verification is currently opt-in, uses only first-page text and
 metadata, and has offline fixture tests. It has **not yet** been validated
 against all 20 cold-start MCS references. Strict mode is recommended for
 experimental runs with enriched source URLs.
+
+## Reproducible enriched three-paper smoke test
+
+The tracked `benchmarks/mcs14_smoke3_enriched.csv` is deliberately
+**source-enriched**, unlike the separate 20-paper cold-start benchmark.
+It contains original MCS reference numbers and candidate URLs already
+collected for references #34, #158 and #753. The verification run must
+work from a copy, because Crawly updates the input CSV:
+
+```bash
+RUN="$HOME/scratch/crawly-data/identity-smoke3"
+mkdir -p "$RUN/pdfs"
+cp benchmarks/mcs14_smoke3_enriched.csv "$RUN/input.csv"
+crawly download "$RUN/input.csv" -o "$RUN/pdfs" \
+    --verify-identity --registry-db "$RUN/sources.sqlite"
+```
+
+Inspect `PDF Identity Status` and `PDF Identity Evidence` in the output
+CSV and `identity_checks` in SQLite, and review PDFs left in
+`$RUN/pdfs/identity_review/`. An outcome of `needs_review` can reflect a
+perfectly correct paper with incomplete extractable metadata. Do not
+treat a 3/3 byte-retrieval outcome as 3/3 bibliographically verified.
