@@ -50,7 +50,10 @@ def extract_doi_from_text_or_url(text: str) -> str:
     return normalize_doi(doi)
 
 
-def resolve_paper_metadata(paper: Paper, timeout: int = 10, config: Optional[AppConfig] = None) -> Paper:
+def resolve_paper_metadata(
+    paper: Paper, timeout: int = 10, config: Optional[AppConfig] = None,
+    skip_openalex: bool = False,
+) -> Paper:
     cfg = config or AppConfig.load()
     if not paper.doi:
         paper.doi = extract_doi_from_text_or_url(paper.url) or extract_doi_from_text_or_url(paper.title)
@@ -61,7 +64,7 @@ def resolve_paper_metadata(paper: Paper, timeout: int = 10, config: Optional[App
     polite_hdrs = get_polite_headers(cfg)
 
     try:
-        if paper.doi:
+        if not skip_openalex and paper.doi:
             oa_api = f"{oa_base}/https://doi.org/{urllib.parse.quote(paper.doi, safe='/')}"
             r = requests.get(oa_api, headers=polite_hdrs, timeout=timeout)
             if r.status_code == 200:
@@ -76,7 +79,7 @@ def resolve_paper_metadata(paper: Paper, timeout: int = 10, config: Optional[App
                     paper.abstract = reconstruct_openalex_abstract(item.get("abstract_inverted_index"))
                 if not paper.citations and item.get("cited_by_count"):
                     paper.citations = int(item["cited_by_count"])
-        if not paper.doi and clean_t:
+        if not skip_openalex and not paper.doi and clean_t:
             r = requests.get(
                 oa_base,
                 params={"search": clean_t, "per-page": 3},
