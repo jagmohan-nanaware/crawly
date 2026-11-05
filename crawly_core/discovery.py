@@ -8,6 +8,7 @@ declare a paper verified.
 from __future__ import annotations
 
 import difflib
+import os
 import re
 import unicodedata
 from typing import Any, Dict, List, Optional, Tuple
@@ -64,14 +65,28 @@ def _get_json(
     url: str,
     params: Optional[dict],
     cfg: AppConfig,
+    blocked_providers: Optional[set[str]] = None,
 ) -> Optional[dict]:
-    """Log provider failures explicitly; never store credentials or query tokens."""
+    """Log provider failures and stop calling a provider once it returns 429."""
+    if blocked_providers is not None and provider in blocked_providers:
+        registry.record_discovery_event(
+            reference_id, provider, "skipped_rate_limited",
+            "Provider blocked after HTTP 429 in this batch",
+        )
+        return None
+    headers = get_polite_headers(cfg)
+    if provider == "OpenAlex" and os.environ.get("OPENALEX_API_KEY"):
+        headers["Authorization"] = "Bearer " + os.environ["OPENALEX_API_KEY"]
+    if provider == "Semantic Scholar" and cfg.semantic_scholar_api_key:
+        headers["x-api-key"] = cfg.semantic_scholar_api_key
     try:
         response = requests.get(
-            url, params=params, headers=get_polite_headers(cfg),
+            url, params=params, headers=headers,
             timeout=cfg.request_timeout,
         )
         if response.status_code != 200:
+            if response.status_code == 429 and blocked_providers is not None:
+                blocked_providers.add(provider)
             status = {
                 401: "authentication_required", 403: "access_denied",
                 404: "not_found", 429: "rate_limited",
@@ -136,20 +151,21 @@ def _add_openalex_locations(
 
 def _discover_openalex(
     paper: Paper, cfg: AppConfig, registry: SourceRegistry, ref_id: str,
+    blocked_providers: Optional[set[str]] = None,
 ) -> List[CandidateSource]:
     url = cfg.api_endpoints.get("openalex_works", DEFAULT_API_ENDPOINTS["openalex_works"]).rstrip("/")
     payload = None
     items: List[dict] = []
     if paper.doi:
         endpoint = f"{url}/https://doi.org/{quote(normalize_doi(paper.doi), safe='/')}"
-        payload = _get_json(registry, ref_id, "OpenAlex", endpoint, None, cfg)
+        payload = _get_json(registry, ref_id, "OpenAlex", endpoint, None, cfg, blocked_providers)
         if payload and _matching_paper(paper, payload, "openalex"):
             items = [payload]
     # A stale/bad DOI or DOI-lookup failure must not suppress title discovery.
     if not items:
         payload = _get_json(
             registry, ref_id, "OpenAlex", url,
-            {"search": paper.clean_title(), "per-page": 5}, cfg,
+            {"search": paper.clean_title(), "per-page": 5}, cfg, blocked_providers,
         )
         items = (payload or {}).get("results") or []
     collected: List[CandidateSource] = []
@@ -169,6 +185,7 @@ def _discover_openalex(
 
 def _discover_semantic_scholar(
     paper: Paper, cfg: AppConfig, registry: SourceRegistry, ref_id: str,
+    blocked_providers: Optional[set[str]] = None,
 ) -> List[CandidateSource]:
     url = cfg.api_endpoints.get(
         "semantic_scholar_search", DEFAULT_API_ENDPOINTS["semantic_scholar_search"]
@@ -177,6 +194,7 @@ def _discover_semantic_scholar(
         registry, ref_id, "Semantic Scholar", url,
         {"query": paper.clean_title(), "limit": 5,
          "fields": "title,year,authors,openAccessPdf,externalIds"}, cfg,
+        blocked_providers,
     )
     if payload is None:
         return []
@@ -217,10 +235,11 @@ def _discover_semantic_scholar(
 
 def discover_oa_sources(
     paper: Paper, cfg: AppConfig, registry: SourceRegistry, reference_id: str,
+    blocked_providers: Optional[set[str]] = None,
 ) -> int:
-    """Search two independent academic services and persist candidate provenance."""
-    candidates = _discover_openalex(paper, cfg, registry, reference_id)
-    candidates.extend(_discover_semantic_scholar(paper, cfg, registry, reference_id))
+    """Search two independent academic services; honor HTTP 429 within batch."""
+    candidates = _discover_openalex(paper, cfg, registry, reference_id, blocked_providers)
+    candidates.extend(_discover_semantic_scholar(paper, cfg, registry, reference_id, blocked_providers))
     known = {source.url for source in registry.list_sources(reference_id)}
     added = 0
     for candidate in candidates:
