@@ -10,8 +10,12 @@ from crawly_core.models import AppConfig, Paper, load_papers_from_csv, save_pape
 from crawly_core.source_registry import SourceRegistry
 
 
-@patch("crawly_core.downloader.discover_oa_sources", return_value=0)
 class TestRegisteredAcquisition(unittest.TestCase):
+    def setUp(self):
+        discovery = patch("crawly_core.downloader.discover_oa_sources", return_value=0)
+        discovery.start()
+        self.addCleanup(discovery.stop)
+
     def test_fetch_status_observer(self):
         cfg = AppConfig()
         with tempfile.TemporaryDirectory() as directory:
