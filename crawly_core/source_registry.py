@@ -154,6 +154,16 @@ class SourceRegistry:
                 )
             """)
             db.execute("""
+                CREATE TABLE IF NOT EXISTS discovery_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    reference_id TEXT NOT NULL,
+                    provider TEXT NOT NULL,
+                    outcome TEXT NOT NULL,
+                    detail TEXT NOT NULL,
+                    observed_utc TEXT NOT NULL
+                )
+            """)
+            db.execute("""
                 CREATE TABLE IF NOT EXISTS identity_checks (
                     reference_id TEXT NOT NULL,
                     url TEXT NOT NULL,
@@ -258,3 +268,26 @@ class SourceRegistry:
              "evidence": json.loads(row["evidence_json"]), "checked_utc": row["checked_utc"]}
             for row in rows
         ]
+
+    def record_discovery_event(
+        self, reference_id: str, provider: str, outcome: str, detail: str,
+    ) -> None:
+        """Store API-level diagnostics separately from PDF download attempts."""
+        with self._connect() as db:
+            db.execute("""
+                INSERT INTO discovery_events
+                    (reference_id, provider, outcome, detail, observed_utc)
+                VALUES (?, ?, ?, ?, ?)
+            """, (
+                reference_id, provider, outcome, detail,
+                datetime.now(timezone.utc).isoformat(),
+            ))
+
+    def list_discovery_events(self, reference_id: str) -> List[dict]:
+        with self._connect() as db:
+            rows = db.execute("""
+                SELECT provider, outcome, detail, observed_utc
+                  FROM discovery_events WHERE reference_id = ?
+                 ORDER BY id
+            """, (reference_id,)).fetchall()
+        return [dict(row) for row in rows]
