@@ -1,5 +1,38 @@
 # Repository and author-hosted PDF source discovery
 
+## Recorded first live result: three URL-free papers
+
+The office-machine `coldstart3-repo-v1` run (2026-11-05) reported:
+
+| MCS ref | Matched providers | Registered PDF candidates | Acquired |
+| --- | --- | --- | --- |
+| 34 — Anderson et al. | none (OpenAlex, HAL, OpenAIRE) | 0 | missing |
+| 158 — Burns & Davis | OpenAlex (no URL); **OpenAIRE** | 1 | **verified**, York-hosted PDF |
+| 753 — Vestal | OpenAlex and OpenAIRE (no URL) | 0 | missing |
+
+The single downloaded candidate originated from OpenAIRE and the download
+source was `www-users.cs.york.ac.uk`. This is **1/3 verified cold-start**,
+versus **0/3** in the immediately preceding authenticated OpenAlex
+three-paper experiment. The fixed full 20-paper baseline remains **1/20**;
+it has not yet been retested with repository discovery enabled.
+
+HAL matched none of the three papers. Semantic Scholar returned HTTP 429
+for the first request; subsequent searches were correctly skipped.
+
+**Interpretation:** The new OpenAIRE fallback has proven at least one
+real cold-start acquisition, but neither of the remaining two missing
+references was resolved. The missing records are not evidence that those
+papers are unavailable; both were retrieved in the earlier enriched-URL
+smoke test. Do not inflate this result by manually adding those known
+links to the cold-start input.
+
+**Next decision:** the remaining discovery problem is likely coverage of
+individual author-hosted/publicly indexed files. The optional,
+key-dependent general web search route can be evaluated independently
+against the two unresolved papers. No evidence yet supports another
+whole-bibliography run.
+
+
 ## Problem
 
 The fixed 20-paper mixed-criticality benchmark downloaded **1/20** papers
