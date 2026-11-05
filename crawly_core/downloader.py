@@ -431,8 +431,8 @@ def _download_from_registry(
 ) -> Tuple[bool, str, Optional[Path]]:
     """Try recorded sources first, then discover OA fallback sources.
 
-    A PDF-header match is recorded as 'pdf_received' (not 'verified').
-    Full document identity verification will be implemented separately.
+    PDF byte validation is distinct from bibliographic identity checks.
+    The strict gate runs only when cfg.verify_pdf_identity is enabled.
     """
     ref_id = (paper.extra_fields.get("MCS Ref No") or paper.doi or paper.clean_title()).strip()
     registry.import_paper(paper)
@@ -459,10 +459,19 @@ def _download_from_registry(
                 status_callback=outcomes.append,
             )
             outcome = outcomes[-1] if outcomes else ("pdf_received" if ok else "download_error")
+            accepted = ok
+            if ok and cfg.verify_pdf_identity:
+                decision = _identity_check_and_archive(
+                    paper, target_path, candidate.url, registry, ref_id,
+                )
+                outcome = "verified" if decision == "verified" else (
+                    "identity_mismatch" if decision == "mismatch" else "pdf_received"
+                )
+                accepted = decision == "verified"
             registry.record_attempt(ref_id, candidate.url, outcome)
             if outcome in ("rate_limited", "access_denied", "authentication_required"):
                 blocked_hosts.add(host.lower())
-            if ok:
+            if accepted:
                 paper.local_pdf = str(target_path)
                 label = candidate.discovered_via if candidate.discovered_via != "csv" else candidate.source_type
                 paper.download_source = f"Registry: {label}"
@@ -511,10 +520,22 @@ def _download_from_registry(
             timeout=cfg.request_timeout + 8, config=cfg,
         )
         if source:
-            paper.local_pdf = str(target_path)
-            paper.download_source = source
-            return True, source, target_path
+            if cfg.verify_pdf_identity:
+                decision = _identity_check_and_archive(
+                    paper, target_path, source, None, ref_id,
+                )
+                if decision == "verified":
+                    paper.local_pdf = str(target_path)
+                    paper.download_source = source
+                    return True, source, target_path
+            else:
+                paper.local_pdf = str(target_path)
+                paper.download_source = source
+                return True, source, target_path
 
+    status = paper.extra_fields.get("PDF Identity Status")
+    if cfg.verify_pdf_identity and status in ("needs_review", "mismatch"):
+        return False, "Needs Review" if status == "needs_review" else "Identity Mismatch", None
     return False, "Not Found", None
 
 
