@@ -75,8 +75,13 @@ def assess_pdf_identity(paper: Paper, path: str | Path) -> IdentityAssessment:
     )
     found_doi = _canonical_doi(header_doi.group(1)) if header_doi else ""
     title_found = bool(title and title in text)
+    # Title + author near the top of the first page is strong document
+    # identity evidence even if the PDF omits the publication year and DOI.
+    # Do not accept matches appearing only in a later introduction/citation.
+    title_header_found = bool(title and title in _normalize(first[:2500]))
     author_text = _normalize(first[:4000] + " " + embedded_author)
     author_found = bool(author and author in author_text.split())
+    author_header_found = bool(author and author in _normalize(first[:2500] + " " + embedded_author).split())
     year_found = bool(paper.year and str(paper.year) in first[:5000])
     doi_found = bool(expected_doi and expected_doi in _canonical_doi(header))
     # Restrict contradictory-title evidence to a meaningful embedded title
@@ -100,7 +105,9 @@ def assess_pdf_identity(paper: Paper, path: str | Path) -> IdentityAssessment:
         "metadata_title_similarity": round(title_similarity, 3),
         "header_doi": found_doi,
         "title_found": title_found,
+        "title_header_found": title_header_found,
         "author_found": author_found,
+        "author_header_found": author_header_found,
         "year_found": year_found,
         "doi_found": doi_found,
         "metadata_title_conflict": metadata_conflict,
@@ -110,6 +117,10 @@ def assess_pdf_identity(paper: Paper, path: str | Path) -> IdentityAssessment:
         status, reason = "mismatch", "contradictory_pdf_identity"
     elif title_found and author_found and (year_found or doi_found or not paper.year):
         status, reason = "verified", "title_author_and_year_or_doi"
+    elif title_header_found and author_header_found:
+        # A full-title, first-author match at the top of page one is enough
+        # for document identity, but the publication year/DOI remain unconfirmed.
+        status, reason = "verified", "exact_header_title_and_author_only"
     else:
         status, reason = "needs_review", "insufficient_positive_evidence"
     evidence["reason"] = reason
