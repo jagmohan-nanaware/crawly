@@ -368,6 +368,55 @@ class TestBibliographicIdentity(unittest.TestCase):
         self.assertEqual(checks[initial]["status"], "needs_review")
         self.assertEqual(checks[later]["status"], "mismatch")
 
+    def test_actionable_reasons_cover_unextractable_title_and_missing_year(self):
+        destination = self.root / "candidate.pdf"
+
+        # Corrupt PDF bytes should be retained and marked for text inspection.
+        destination.write_bytes(b"%PDF-1.4\n" + b"garbage" * 200)
+        status = _identity_check_and_archive(
+            self.paper, destination, "https://author.edu/unreadable", None, "753",
+        )
+        self.assertEqual(status, "needs_review")
+        self.assertIn("could not be extracted", self.paper.extra_fields["PDF Review Reason"])
+        self.assertTrue(Path(json.loads(self.paper.extra_fields["PDF Identity Evidence"])["review_pdf_path"]).exists())
+
+        # Year is visible, but title is absent and no conflicting PDF heading is present.
+        make_pdf(destination, "Steve Vestal discusses scheduling in 2007")
+        status = _identity_check_and_archive(
+            self.paper, destination, "https://author.edu/no-title", None, "753",
+        )
+        self.assertEqual(status, "needs_review")
+        self.assertIn("title not matched", self.paper.extra_fields["PDF Review Reason"])
+
+        # The title appears only later, so a header identity cannot be assumed.
+        make_pdf(destination, ("intro " * 450) + self.title + " Steve Vestal")
+        status = _identity_check_and_archive(
+            self.paper, destination, "https://author.edu/no-year", None, "753",
+        )
+        self.assertEqual(status, "needs_review")
+        self.assertIn("year and DOI not confirmed", self.paper.extra_fields["PDF Review Reason"])
+
+    def test_optional_mirror_reviewable_candidate_is_kept(self):
+        cfg = AppConfig(verify_pdf_identity=True, use_scihub_fallback=True)
+        with (
+            patch("crawly_core.downloader.resolve_paper_metadata"),
+            patch("crawly_core.downloader._candidate_unpaywall_urls", return_value=[]),
+            patch("crawly_core.downloader._candidate_semantic_scholar_urls", return_value=[]),
+            patch("crawly_core.downloader._candidate_europe_pmc_urls", return_value=[]),
+            patch("crawly_core.downloader._fetch_and_verify_pdf", return_value=False),
+            patch("crawly_core.downloader._try_scihub_download") as mirror,
+        ):
+            def fake_mirror(paper, target, **kwargs):
+                make_pdf(target, self.title + " 2007", self.title)
+                return "Mirror supplied by user"
+            mirror.side_effect = fake_mirror
+            acquired = download_paper_pdf(self.paper, self.root / "pdfs", cfg)
+        self.assertTrue(acquired[0])
+        self.assertIn("Needs Review", acquired[1])
+        self.assertTrue(acquired[2].exists())
+        self.assertEqual(self.paper.extra_fields["PDF Identity Status"], "needs_review")
+        self.assertIn("first author not matched", self.paper.extra_fields["PDF Review Reason"])
+
     def test_quarantined_files_do_not_overwrite_previous_evidence(self):
         destination = self.root / "paper.pdf"
         make_pdf(destination, "Totally different scientific article 2018",
