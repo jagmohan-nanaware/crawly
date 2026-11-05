@@ -43,16 +43,16 @@ jobs:
         id: run_tests
         continue-on-error: true
         run: |
-          python -m coverage run -m unittest discover -s tests -v > test_output.txt 2>&1
-          echo "test_exit_code=$?" >> "$GITHUB_OUTPUT"
+          python -m coverage run -m unittest discover -s tests -v > test_output.txt 2>&1 || test_exit_code=$?
+          echo "test_exit_code=${test_exit_code:-0}" >> "$GITHUB_OUTPUT"
           cat test_output.txt
 
       - name: Verify 100% Code Coverage Threshold
         id: check_coverage
         continue-on-error: true
         run: |
-          python -m coverage report -m --fail-under=100 > coverage_report.txt 2>&1
-          echo "cov_exit_code=$?" >> "$GITHUB_OUTPUT"
+          python -m coverage report -m --fail-under=100 > coverage_report.txt 2>&1 || cov_exit_code=$?
+          echo "cov_exit_code=${cov_exit_code:-0}" >> "$GITHUB_OUTPUT"
           cat coverage_report.txt
 
       - name: Publish Quality Gate Job Summary

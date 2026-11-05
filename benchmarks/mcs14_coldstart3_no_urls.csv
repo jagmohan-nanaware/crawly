@@ -1,0 +1,4 @@
+Paper Title,Year,Author,Publication,MCS Ref No,MCS Sections,Expected Filename
+Multicore operating-system support for mixed criticality,2009,"J.H. Anderson, S.K. Baruah, and B.B. Brandenburg",Unknown,34,4,34-4-Anderson-14.pdf
+Mixed criticality on controller area network,2013,A. Burns and R.I. Davis,Unknown,158,2; 3.2.1; 4.3; 5.2,158-2+3.2.1+4.3+5.2-Burns-14.pdf
+Preemptive scheduling of multi-criticality systems with varying degrees of execution time assurance,2007,S. Vestal,Unknown,753,1; 2; 3; 3.2.3; 9; 10; 12,753-1+2+3+3.2.3+9+10+12-Vestal-14.pdf
