@@ -222,7 +222,7 @@ class TestRegisteredAcquisition(unittest.TestCase):
             self.assertTrue(result[0])
             self.assertEqual(result[1], "Registry: Unpaywall OA")
             self.assertEqual(len(seen), 2)
-            resolver.assert_called_once()
+            resolver.assert_not_called()
             self.assertEqual(registry.list_sources("607")[0].last_outcome, "pdf_received")
             self.assertEqual(len(registry.list_sources("607")), 2)
 
