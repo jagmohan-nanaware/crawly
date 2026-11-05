@@ -227,7 +227,7 @@ class TestBibliographicIdentity(unittest.TestCase):
         self.assertTrue((output / self.paper.safe_filename()).exists())
         self.assertEqual(load_papers_from_csv(csv_path)[0].extra_fields["PDF Identity Status"], "verified")
 
-    def test_needs_review_quarantines_and_is_not_counted_as_success(self):
+    def test_needs_review_retained_as_download_with_reason(self):
         cfg = AppConfig(verify_pdf_identity=True)
         def fake_fetch(url, target, **kwargs):
             make_pdf(target, self.title + " 2007", self.title)
@@ -241,13 +241,18 @@ class TestBibliographicIdentity(unittest.TestCase):
             patch("crawly_core.downloader._candidate_europe_pmc_urls", return_value=[]),
         ):
             stats = download_batch_pdfs([self.paper], self.root / "pdfs", config=cfg)
-        self.assertEqual(stats["downloaded"], 0)
-        self.assertEqual(stats["missing"], 1)
+        self.assertEqual(stats["downloaded"], 1)
+        self.assertEqual(stats["missing"], 0)
         self.assertEqual(stats["verified"], 0)
         self.assertEqual(stats["needs_review"], 1)
         self.assertEqual(stats["identity_mismatch"], 0)
         self.assertEqual(self.paper.extra_fields["PDF Identity Status"], "needs_review")
-        self.assertTrue(list((self.root / "pdfs" / "identity_review" / "needs_review").glob("*.pdf")))
+        self.assertIn("first author not matched", self.paper.extra_fields["PDF Review Reason"])
+        archived = list((self.root / "pdfs" / "identity_review" / "needs_review").glob("*.pdf"))
+        self.assertEqual(len(archived), 1)
+        self.assertEqual(Path(self.paper.local_pdf), archived[0])
+        self.assertTrue(archived[0].exists())
+        self.assertIn("Needs Review", stats)
         registry = SourceRegistry(self.root / "pdfs" / "sources.sqlite")
         self.assertEqual(registry.list_sources("753")[0].last_outcome, "pdf_received")
         self.assertEqual(registry.list_identity_checks("753")[0]["status"], "needs_review")
@@ -255,6 +260,7 @@ class TestBibliographicIdentity(unittest.TestCase):
     def test_strict_rerun_clears_stale_success_from_csv(self):
         self.paper.extra_fields["PDF Identity Status"] = "verified"
         self.paper.extra_fields["PDF Identity Evidence"] = '{"old": true}'
+        self.paper.extra_fields["PDF Review Reason"] = "An outdated review note"
         self.paper.local_pdf = "/old/location/incorrect.pdf"
         self.paper.download_source = "Old source"
         with (
@@ -270,6 +276,7 @@ class TestBibliographicIdentity(unittest.TestCase):
         self.assertFalse(result[0])
         self.assertNotIn("PDF Identity Status", self.paper.extra_fields)
         self.assertNotIn("PDF Identity Evidence", self.paper.extra_fields)
+        self.assertNotIn("PDF Review Reason", self.paper.extra_fields)
         self.assertEqual(self.paper.local_pdf, "")
         self.assertEqual(self.paper.download_source, "")
 
@@ -302,6 +309,64 @@ class TestBibliographicIdentity(unittest.TestCase):
         self.assertFalse(missing[0])
         self.assertEqual(self.paper.local_pdf, "")
         self.assertTrue(list((target_dir / "identity_review" / "mismatch").glob("*.pdf")))
+
+    def test_reviewable_cached_file_is_retained_without_network(self):
+        directory = self.root / "pdfs"
+        directory.mkdir()
+        cached = directory / self.paper.safe_filename()
+        make_pdf(cached, self.title + " 2007", self.title)
+        with patch("crawly_core.downloader._fetch_and_verify_pdf") as fetch:
+            ok, source, pdf_path = download_paper_pdf(
+                self.paper, directory, AppConfig(verify_pdf_identity=True),
+            )
+        self.assertTrue(ok)
+        self.assertEqual(source, "Needs Review: Local Cache")
+        self.assertEqual(pdf_path, Path(self.paper.local_pdf))
+        self.assertTrue(pdf_path.exists())
+        self.assertEqual(self.paper.extra_fields["PDF Identity Status"], "needs_review")
+        fetch.assert_not_called()
+
+    def test_first_review_candidate_survives_later_mismatch(self):
+        cfg = AppConfig(verify_pdf_identity=True)
+        initial = "https://author.example.edu/incomplete.pdf"
+        later = "https://mirror.example.edu/other.pdf"
+        self.paper.pdf_url = initial
+        self.paper.extra_fields.update({
+            "Source URL 2": later,
+            "Access Confidence 1": "0.98",
+            "Identity Confidence 1": "0.98",
+            "Access Confidence 2": "0.4",
+        })
+        attempts = []
+
+        def fetch(url, dest, **kwargs):
+            attempts.append(url)
+            if url == initial:
+                make_pdf(dest, self.title + " 2007", self.title)
+            else:
+                wrong = "Unrelated article about embedded robotics"
+                make_pdf(dest, wrong + " Another Author 2021", wrong)
+            kwargs["status_callback"]("pdf_received")
+            return True
+
+        with (
+            patch("crawly_core.downloader._fetch_and_verify_pdf", side_effect=fetch),
+            patch("crawly_core.downloader.resolve_paper_metadata"),
+            patch("crawly_core.downloader._candidate_unpaywall_urls", return_value=[]),
+            patch("crawly_core.downloader._candidate_semantic_scholar_urls", return_value=[]),
+            patch("crawly_core.downloader._candidate_europe_pmc_urls", return_value=[]),
+        ):
+            result = download_paper_pdf(self.paper, self.root / "pdfs", cfg)
+        self.assertTrue(result[0])
+        self.assertTrue(result[1].startswith("Needs Review:"))
+        self.assertEqual(attempts, [initial, later])
+        self.assertEqual(self.paper.extra_fields["PDF Identity Status"], "needs_review")
+        self.assertIn("first author not matched", self.paper.extra_fields["PDF Review Reason"])
+        self.assertTrue(Path(self.paper.local_pdf).exists())
+        registry = SourceRegistry(self.root / "pdfs" / "sources.sqlite")
+        checks = {record["url"]: record for record in registry.list_identity_checks("753")}
+        self.assertEqual(checks[initial]["status"], "needs_review")
+        self.assertEqual(checks[later]["status"], "mismatch")
 
     def test_quarantined_files_do_not_overwrite_previous_evidence(self):
         destination = self.root / "paper.pdf"
