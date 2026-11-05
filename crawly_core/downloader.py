@@ -693,6 +693,10 @@ def download_batch_pdfs(
     }
     if registry is not None:
         stats["skipped"] = skipped
+    if cfg.verify_pdf_identity:
+        stats["verified"] = sum(p.extra_fields.get("PDF Identity Status") == "verified" for p in papers)
+        stats["needs_review"] = sum(p.extra_fields.get("PDF Identity Status") == "needs_review" for p in papers)
+        stats["identity_mismatch"] = sum(p.extra_fields.get("PDF Identity Status") == "mismatch" for p in papers)
     return stats
 
 
