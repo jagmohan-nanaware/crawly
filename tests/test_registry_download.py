@@ -191,7 +191,7 @@ class TestRegisteredAcquisition(unittest.TestCase):
             ):
                 result = download_paper_pdf(paper, Path(directory), AppConfig(), registry=registry)
             self.assertTrue(result[0])
-            resolve.assert_not_called()
+            resolve.assert_called_once()
             self.assertEqual(fetch.call_count, 1)
             self.assertEqual(registry.list_sources("300")[0].last_outcome, "pdf_received")
 
