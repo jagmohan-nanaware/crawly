@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import csv
 import difflib
+import hashlib
+import json
 import re
 import urllib.parse
 from pathlib import Path
@@ -13,6 +15,7 @@ import requests
 from bs4 import BeautifulSoup
 
 from .models import DEFAULT_API_ENDPOINTS, AppConfig, Paper, save_papers_to_csv
+from .identity import assess_pdf_identity
 from .source_registry import CandidateSource, SourceRegistry, is_excluded_reference
 from .sources import get_browser_headers, get_polite_headers, normalize_doi, reconstruct_openalex_abstract
 
@@ -386,6 +389,36 @@ def _try_scihub_download(
 
     return None
 
+
+
+
+def _identity_check_and_archive(
+    paper: Paper,
+    target_path: Path,
+    url: str,
+    registry: Optional[SourceRegistry],
+    reference_id: str,
+) -> str:
+    """Keep unverified PDFs out of the accepted directory while retaining evidence."""
+    assessment = assess_pdf_identity(paper, target_path)
+    evidence = dict(assessment.evidence)
+    if assessment.status != "verified":
+        archive_dir = target_path.parent / "identity_review" / assessment.status
+        archive_dir.mkdir(parents=True, exist_ok=True)
+        digest = hashlib.sha256(url.encode("utf-8")).hexdigest()[:10]
+        basename = f"{target_path.stem}--{digest}"
+        archived = archive_dir / f"{basename}.pdf"
+        index = 1
+        while archived.exists():
+            archived = archive_dir / f"{basename}-{index}.pdf"
+            index += 1
+        target_path.replace(archived)
+        evidence["review_pdf_path"] = str(archived)
+    paper.extra_fields["PDF Identity Status"] = assessment.status
+    paper.extra_fields["PDF Identity Evidence"] = json.dumps(evidence, sort_keys=True)
+    if registry is not None and url != "local-cache":
+        registry.record_identity_check(reference_id, url, assessment.status, evidence)
+    return assessment.status
 
 
 def _download_from_registry(
