@@ -79,6 +79,8 @@ def _get_json(
         headers["Authorization"] = "Bearer " + os.environ["OPENALEX_API_KEY"]
     if provider == "Semantic Scholar" and cfg.semantic_scholar_api_key:
         headers["x-api-key"] = cfg.semantic_scholar_api_key
+    if provider == "Brave" and os.environ.get("BRAVE_SEARCH_API_KEY"):
+        headers["X-Subscription-Token"] = os.environ["BRAVE_SEARCH_API_KEY"]
     try:
         response = requests.get(
             url, params=params, headers=headers,
