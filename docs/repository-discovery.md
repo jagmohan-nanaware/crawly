@@ -72,12 +72,12 @@ RUN="$HOME/scratch/crawly-data/coldstart3-repositories-v1"
 mkdir -p "$RUN/pdfs"
 cp benchmarks/mcs14_coldstart3_no_urls.csv "$RUN/input.csv"
 
-python3 crawly.py download "$RUN/input.csv" \\
-  -o "$RUN/pdfs" --verify-identity \\
+python3 crawly.py download "$RUN/input.csv" \
+  -o "$RUN/pdfs" --verify-identity \
   --registry-db "$RUN/sources.sqlite"
 
-python3 tools/inspect_coldstart_results.py \\
-  --results "$RUN/input.csv" --database "$RUN/sources.sqlite" \\
+python3 tools/inspect_coldstart_results.py \
+  --results "$RUN/input.csv" --database "$RUN/sources.sqlite" \
   | tee "$RUN/diagnostics.txt"
 ```
 
