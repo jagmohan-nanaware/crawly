@@ -174,7 +174,7 @@ class TestRegisteredAcquisition(unittest.TestCase):
                 result = download_paper_pdf(paper, Path(directory), AppConfig(), registry=registry)
             self.assertTrue(result[0])
             self.assertEqual(attempted, ["https://repository.example.edu/open.pdf"])
-            resolve.assert_called_once()
+            resolve.assert_not_called()
 
     def test_landing_page_is_eventually_tried_when_no_other_source(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -191,7 +191,7 @@ class TestRegisteredAcquisition(unittest.TestCase):
             ):
                 result = download_paper_pdf(paper, Path(directory), AppConfig(), registry=registry)
             self.assertTrue(result[0])
-            resolve.assert_called_once()
+            resolve.assert_not_called()
             self.assertEqual(fetch.call_count, 1)
             self.assertEqual(registry.list_sources("300")[0].last_outcome, "pdf_received")
 
