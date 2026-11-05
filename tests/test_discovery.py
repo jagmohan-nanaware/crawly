@@ -146,7 +146,7 @@ class TestColdstartDiscovery(unittest.TestCase):
         with patch("crawly_core.discovery.requests.get", return_value=response(200, openalex_item())) as req:
             found = _discover_openalex(self.paper, self.cfg, self.registry, "158")
         self.assertTrue(any(x.url.endswith("accepted.pdf") for x in found))
-        self.assertIn(DOI, req.call_args.args[0])
+        self.assertIn(DOI.lower(), req.call_args.args[0])
         self.assertEqual(self.registry.list_discovery_events("158")[-1]["outcome"], "matched")
 
         # DOI is stale/unavailable, but title search finds an OA record.
