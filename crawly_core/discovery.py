@@ -21,7 +21,9 @@ from .sources import get_polite_headers, normalize_doi
 
 
 def _clean(value: str) -> str:
-    value = unicodedata.normalize("NFKD", str(value or "")).encode("ascii", "ignore").decode("ascii")
+    value = unicodedata.normalize("NFKD", str(value or ""))
+    value = re.sub(r"[‐‑‒–—―]", " ", value)
+    value = value.encode("ascii", "ignore").decode("ascii")
     return " ".join(re.findall(r"[a-z0-9]+", value.lower()))
 
 
