@@ -45,7 +45,7 @@ def _matching_paper(paper: Paper, item: Dict[str, Any], service: str) -> bool:
         return False
     first_author = re.split(r"\s+and\s+|\s*,\s*|\s*;\s*", str(paper.authors or ""), maxsplit=1, flags=re.I)[0]
     surname = _clean(first_author).split()
-    if surname:
+    if surname and surname != ["unknown"] and surname != ["na"]:
         family = surname[-1]
         authors = item.get("authorships") if service == "openalex" else item.get("authors")
         authors = authors or []
