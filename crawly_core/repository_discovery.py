@@ -12,6 +12,7 @@ No publisher access restrictions, CAPTCHA or paywalls are bypassed.
 
 from __future__ import annotations
 
+import ipaddress
 import os
 import re
 from typing import Any, List, Optional, Sequence
@@ -41,6 +42,15 @@ def _urls(
         parsed = urlsplit(url)
         if parsed.scheme.lower() not in ("https", "http") or not parsed.hostname or url in seen:
             continue
+        host = parsed.hostname.lower()
+        if (parsed.username or parsed.password or host == "localhost"
+                or host.endswith((".localhost", ".local", ".internal"))):
+            continue
+        try:
+            if not ipaddress.ip_address(host).is_global:
+                continue
+        except ValueError:
+            pass  # An ordinary DNS hostname; no DNS lookup is performed.
         # Metadata-provider redirects to doi.org are typically publisher
         # landing pages, not OA PDFs. Do not treat them as direct sources.
         is_direct = bool(
