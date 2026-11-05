@@ -452,6 +452,21 @@ def _download_from_registry(
     ref_id = (paper.extra_fields.get("MCS Ref No") or paper.doi or paper.clean_title()).strip()
     registry.import_paper(paper)
     tried: set[str] = set()
+    # A reviewable PDF is still an acquired candidate. Keep the first one
+    # available while trying to find a bibliographically verified alternative.
+    review_candidate: Optional[Tuple[str, str, str, str]] = None
+
+    def remember_review(source_label: str) -> None:
+        nonlocal review_candidate
+        if review_candidate is None:
+            evidence_json = paper.extra_fields["PDF Identity Evidence"]
+            evidence = json.loads(evidence_json)
+            review_candidate = (
+                evidence["review_pdf_path"],
+                source_label,
+                evidence_json,
+                paper.extra_fields["PDF Review Reason"],
+            )
 
     def try_sources(include_landing: bool = False) -> Tuple[bool, str, Optional[Path]]:
         for candidate in registry.list_sources(ref_id):
@@ -483,6 +498,9 @@ def _download_from_registry(
                     "identity_mismatch" if decision == "mismatch" else "pdf_received"
                 )
                 accepted = decision == "verified"
+                if decision == "needs_review":
+                    label = candidate.discovered_via if candidate.discovered_via != "csv" else candidate.source_type
+                    remember_review(f"Registry: {label}")
             registry.record_attempt(ref_id, candidate.url, outcome)
             if outcome in ("rate_limited", "access_denied", "authentication_required"):
                 blocked_hosts.add(host.lower())
@@ -543,14 +561,24 @@ def _download_from_registry(
                     paper.local_pdf = str(target_path)
                     paper.download_source = source
                     return True, source, target_path
+                if decision == "needs_review":
+                    remember_review(source)
             else:
                 paper.local_pdf = str(target_path)
                 paper.download_source = source
                 return True, source, target_path
 
-    status = paper.extra_fields.get("PDF Identity Status")
-    if cfg.verify_pdf_identity and status in ("needs_review", "mismatch"):
-        return False, "Needs Review" if status == "needs_review" else "Identity Mismatch", None
+    if review_candidate is not None:
+        review_path, review_source, evidence_json, review_reason = review_candidate
+        paper.local_pdf = review_path
+        paper.download_source = review_source
+        paper.extra_fields["PDF Identity Status"] = "needs_review"
+        paper.extra_fields["PDF Identity Evidence"] = evidence_json
+        paper.extra_fields["PDF Review Reason"] = review_reason
+        return True, f"Needs Review: {review_source}", Path(review_path)
+
+    if cfg.verify_pdf_identity and paper.extra_fields.get("PDF Identity Status") == "mismatch":
+        return False, "Identity Mismatch", None
     return False, "Not Found", None
 
 
