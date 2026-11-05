@@ -224,7 +224,7 @@ class TestColdstartDiscovery(unittest.TestCase):
         # the registry gains a candidate before attempting fallback downloads.
         candidate = "https://university.edu/accepted.pdf"
         calls = []
-        def fake_discover(paper, cfg, registry, ref):
+        def fake_discover(paper, cfg, registry, ref, blocked_providers=None):
             registry.upsert(CandidateSource(ref, candidate, source_type="discovered_oa",
                                             discovered_via="OpenAlex OA"))
             return 1
