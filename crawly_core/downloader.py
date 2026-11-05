@@ -553,6 +553,12 @@ def download_paper_pdf(
         registry = SourceRegistry(cfg.source_registry_path or (output_dir / "sources.sqlite"))
     if registry is not None and is_excluded_reference(paper):
         return False, "Excluded document type", None
+    if cfg.verify_pdf_identity:
+        # An earlier run's CSV success must not survive a failed revalidation.
+        paper.extra_fields.pop("PDF Identity Status", None)
+        paper.extra_fields.pop("PDF Identity Evidence", None)
+        paper.local_pdf = ""
+        paper.download_source = ""
     target_path = output_dir / paper.safe_filename()
 
     if target_path.exists() and target_path.stat().st_size > 1024:
