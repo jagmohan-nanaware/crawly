@@ -383,6 +383,7 @@ class AppConfig:
     # Opt-in: use recorded alternate URLs before normal academic API fallbacks.
     use_source_registry: bool = False
     source_registry_path: str = ""
+    verify_pdf_identity: bool = False
 
     unpaywall_email: str = "crawly.theliteratureassistant@gmail.com"
     semantic_scholar_api_key: str = ""
