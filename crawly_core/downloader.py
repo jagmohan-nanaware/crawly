@@ -596,7 +596,7 @@ def download_paper_pdf(
 ) -> Tuple[bool, str, Optional[Path]]:
     cfg = config or AppConfig.load()
     output_dir.mkdir(parents=True, exist_ok=True)
-    if cfg.verify_pdf_identity and registry is None:
+    if (cfg.verify_pdf_identity or cfg.use_source_registry) and registry is None:
         registry = SourceRegistry(cfg.source_registry_path or (output_dir / "sources.sqlite"))
     if registry is not None and is_excluded_reference(paper):
         return False, "Excluded document type", None
