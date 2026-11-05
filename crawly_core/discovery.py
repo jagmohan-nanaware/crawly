@@ -137,7 +137,26 @@ def _add_openalex_locations(
                 continue
             collected.append(candidate)
             seen.add(url)
-    oa_url = (item.get("open_access") or {}).get("oa_url")
+    # OpenAlex's cached OA PDFs are separate from host location pdf_url.
+    # The free key is supplied only at download time, never saved to SQLite.
+    archive_url = (item.get("content_urls") or {}).get("pdf")
+    has_pdf = (item.get("has_content") or {}).get("pdf") is True
+    open_access = item.get("open_access") or {}
+    if (os.environ.get("OPENALEX_API_KEY") and has_pdf
+            and open_access.get("is_oa") is True
+            and isinstance(archive_url, str)
+            and archive_url.startswith("https://content.openalex.org/works/")
+            and archive_url not in seen):
+        try:
+            collected.append(CandidateSource(
+                reference_id=ref_id, url=archive_url,
+                source_type="openalex_content", discovered_via="OpenAlex Archive",
+                access_confidence=0.85, identity_confidence=0.85, expected_cost=1.0,
+            ))
+            seen.add(archive_url)
+        except ValueError:
+            pass
+    oa_url = open_access.get("oa_url")
     if isinstance(oa_url, str) and oa_url and oa_url not in seen:
         try:
             collected.append(CandidateSource(
