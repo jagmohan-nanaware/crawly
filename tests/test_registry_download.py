@@ -15,6 +15,9 @@ class TestRegisteredAcquisition(unittest.TestCase):
         discovery = patch("crawly_core.downloader.discover_oa_sources", return_value=0)
         discovery.start()
         self.addCleanup(discovery.stop)
+        repositories = patch("crawly_core.downloader.discover_repository_sources", return_value=0)
+        repositories.start()
+        self.addCleanup(repositories.stop)
 
     def test_fetch_status_observer(self):
         cfg = AppConfig()
