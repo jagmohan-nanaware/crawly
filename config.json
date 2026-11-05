@@ -49,6 +49,7 @@
   "default_sort": "relevance",
   "request_timeout": 12,
   "use_source_registry": false,
+  "verify_pdf_identity": false,
   "source_registry_path": "",
   "unpaywall_email": "crawly.theliteratureassistant@gmail.com",
   "semantic_scholar_api_key": "",
