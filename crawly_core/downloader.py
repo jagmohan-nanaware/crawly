@@ -600,6 +600,7 @@ def download_paper_pdf(
         # An earlier run's CSV success must not survive a failed revalidation.
         paper.extra_fields.pop("PDF Identity Status", None)
         paper.extra_fields.pop("PDF Identity Evidence", None)
+        paper.extra_fields.pop("PDF Review Reason", None)
         paper.local_pdf = ""
         paper.download_source = ""
     target_path = output_dir / paper.safe_filename()
@@ -618,6 +619,11 @@ def download_paper_pdf(
                         paper.local_pdf = str(target_path)
                         paper.download_source = paper.download_source or "Local Cache"
                         return True, paper.download_source, target_path
+                    if decision == "needs_review":
+                        review_path = Path(json.loads(paper.extra_fields["PDF Identity Evidence"])["review_pdf_path"])
+                        paper.local_pdf = str(review_path)
+                        paper.download_source = "Local Cache"
+                        return True, "Needs Review: Local Cache", review_path
                     paper.local_pdf = ""
                 else:
                     paper.local_pdf = str(target_path)
