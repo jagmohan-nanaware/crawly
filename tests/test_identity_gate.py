@@ -43,9 +43,11 @@ def make_pdf(path: Path, text: str, title: str = "", author: str = "") -> None:
         writer.write(handle)
 
 
-@patch("crawly_core.downloader.discover_oa_sources", return_value=0)
 class TestBibliographicIdentity(unittest.TestCase):
     def setUp(self):
+        discovery = patch("crawly_core.downloader.discover_oa_sources", return_value=0)
+        discovery.start()
+        self.addCleanup(discovery.stop)
         self.directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)
         self.root = Path(self.directory.name)
