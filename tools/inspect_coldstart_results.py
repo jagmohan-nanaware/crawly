@@ -27,7 +27,19 @@ def summarize(csv_file: Path, database: Path) -> str:
                     registry[str(ref)].append(
                         (url, attempts, outcome, response_count)
                     )
+    events = defaultdict(list)
+    if database.is_file():
+        with sqlite3.connect(database) as connection:
+            has_events = connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='discovery_events'"
+            ).fetchone()
+            if has_events:
+                for ref, provider, outcome, detail in connection.execute(
+                    "SELECT reference_id, provider, outcome, detail FROM discovery_events ORDER BY id"
+                ):
+                    events[str(ref)].append((provider, outcome, detail))
     counts = Counter()
+    provider_outcomes = Counter()
     lines = [
         "CRAWLY COLD-START DIAGNOSTIC (existing CSV + SQLite only)",
         f"Input: {csv_file}",
@@ -65,6 +77,9 @@ def summarize(csv_file: Path, database: Path) -> str:
         )
         if outcomes:
             lines.append(f"      attempts: {outcomes}")
+        for provider, outcome, detail in events.get(ref, []):
+            provider_outcomes[(provider, outcome)] += 1
+            lines.append(f"      discovery: {provider}={outcome} ({detail})")
     lines.extend([
         "",
         "SUMMARY",
@@ -76,8 +91,12 @@ def summarize(csv_file: Path, database: Path) -> str:
         "",
         "Interpretation: 0 candidates suggests discovery failure; candidates with",
         "failed attempts suggest access, rate-limit, link or PDF-response failure.",
-        "The current code does not persist OpenAlex/Crossref/Unpaywall API",
-        "HTTP statuses, so precise provider failures are not inferable here.",
+        "Discovery-stage HTTP outcomes are recorded for new OpenAlex and",
+        "Semantic Scholar probes. Legacy metadata resolver, Unpaywall,",
+        "Crossref and Europe PMC do not yet have complete API status telemetry.",
+        "",
+        "DISCOVERY PROVIDER OUTCOMES",
+        *[f"  {provider}: {status} = {count}" for (provider, status), count in sorted(provider_outcomes.items())],
     ])
     return "\n".join(lines)
 
