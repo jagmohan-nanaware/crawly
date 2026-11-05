@@ -63,8 +63,13 @@ class TestRepositoryDiscovery(unittest.TestCase):
         items = _urls("158", [
             PDF, PDF, "file:///etc/passwd", "", "mailto:user@york.ac.uk",
             "https://doi.org/10.1000/doc", 123, "https:///no-host",
+            "http://127.0.0.1:8080/admin.pdf", "http://169.254.169.254/metadata",
+            "https://10.0.0.1/copy.pdf", "http://localhost/file.pdf",
+            "https://example.local/copy.pdf", "https://example.internal/private",
+            "https://user:password@example.org/private.pdf",
+            "https://public.example.org/another.pdf",
         ], "HAL repository", True)
-        self.assertEqual(len(items), 2)
+        self.assertEqual(len(items), 3)
         self.assertEqual(items[0].source_type, "discovered_oa")
         self.assertEqual(items[1].source_type, "landing_page")
         self.assertEqual(items[0].discovered_via, "HAL repository")
