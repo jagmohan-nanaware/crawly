@@ -1092,6 +1092,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         console.print(
             f"\n[bold green]✓ Downloaded {stats['downloaded']}/{stats['total']} PDFs to {out_dir}/ (BibTeX: {bib_p})[/bold green]"
         )
+        if session_cfg.verify_pdf_identity:
+            console.print(
+                f"[bold cyan]Identity check:[/bold cyan] "
+                f"verified={stats.get('verified', 0)}, "
+                f"needs_review={stats.get('needs_review', 0)}, "
+                f"mismatch={stats.get('identity_mismatch', 0)}"
+            )
         return 0
 
     if args.command == "ai":
