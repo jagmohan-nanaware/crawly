@@ -19,16 +19,21 @@ existing downloads continue to operate unchanged. You may also configure
 
 ### Identity decision rules
 
-- `verified`: normalized full title appears on page one, first author's
-  surname appears in that page or PDF author metadata, and expected year or
-  DOI appears (or the reference has no known year). No explicit contradicting
-  header DOI or strongly conflicting title metadata.
+- `verified`: normalized full title and first author's surname match,
+  with no explicit contradicting DOI/title metadata. The strongest match
+  includes publication year or DOI; an **exact first-page heading title and
+  first author** may also establish document identity if year and DOI are
+  absent from the PDF. Evidence records which rule was satisfied.
 - `needs_review`: text is missing/unextractable, or evidence is incomplete.
 - `mismatch`: contradictory DOI in the first-page DOI field or a clearly
   different embedded title also appearing as the PDF heading.
 
 These are intentionally conservative **heuristic decisions**, not a proof
 of identity and not a substitute for manual audit of high-impact references.
+A result with reason `exact_header_title_and_author_only` verifies
+*document identity provisionally*; it does **not** independently confirm
+publication year, venue, or DOI. Keep those fields subject to bibliographic
+metadata validation.
 False negatives can occur with title typography, scanned documents, different
 editions, author naming conventions or inaccessible embedded text. The tool
 does not use OCR or request external verification data.
