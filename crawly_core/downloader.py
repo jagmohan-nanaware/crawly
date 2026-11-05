@@ -403,6 +403,20 @@ def _identity_check_and_archive(
     assessment = assess_pdf_identity(paper, target_path)
     evidence = dict(assessment.evidence)
     if assessment.status != "verified":
+        if evidence.get("reason") == "pdf_text_unavailable":
+            review_reason = "PDF text could not be extracted; inspect the candidate manually"
+        elif assessment.status == "mismatch":
+            review_reason = "Conflicting PDF title or DOI; inspect the candidate manually"
+        else:
+            missing = []
+            if not evidence.get("title_found"):
+                missing.append("title not matched")
+            if not evidence.get("author_found"):
+                missing.append("first author not matched")
+            if not (evidence.get("year_found") or evidence.get("doi_found")):
+                missing.append("year and DOI not confirmed")
+            review_reason = "; ".join(missing) or "Bibliographic evidence insufficient"
+        evidence["review_reason"] = review_reason
         archive_dir = target_path.parent / "identity_review" / assessment.status
         archive_dir.mkdir(parents=True, exist_ok=True)
         digest = hashlib.sha256(url.encode("utf-8")).hexdigest()[:10]
@@ -416,6 +430,7 @@ def _identity_check_and_archive(
         evidence["review_pdf_path"] = str(archived)
     paper.extra_fields["PDF Identity Status"] = assessment.status
     paper.extra_fields["PDF Identity Evidence"] = json.dumps(evidence, sort_keys=True)
+    paper.extra_fields["PDF Review Reason"] = evidence.get("review_reason", "")
     if registry is not None and url != "local-cache":
         registry.record_identity_check(reference_id, url, assessment.status, evidence)
     return assessment.status
