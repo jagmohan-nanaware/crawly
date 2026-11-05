@@ -39,14 +39,24 @@ editions, author naming conventions or inaccessible embedded text. The tool
 does not use OCR or request external verification data.
 
 Every source assessment is retained in SQLite `identity_checks` alongside
-the source attempt; the final decision and evidence JSON are preserved in
-`PDF Identity Status` and `PDF Identity Evidence` CSV columns.
+the source attempt. The CSV preserves `PDF Identity Status`,
+`PDF Identity Evidence`, and a human-readable `PDF Review Reason`.
 
-A file with status `mismatch` or `needs_review` is moved under
-`identity_review/<status>/` using a source-derived unique name rather than
-being counted as an accepted PDF. Crawly continues to other known sources.
-The result is counted as downloaded only after `verified`. Previously
-cached PDFs are checked too and quarantined if insufficient or mismatched.
+**A downloadable `needs_review` PDF is retained and counted as retrieved.**
+Its `Local PDF` column points to the saved candidate under
+`identity_review/needs_review/`; it is not falsely counted as
+bibliographically verified. Crawly continues trying other sources for a
+verified copy, preferring one if available. The best reviewable candidate
+remains available if none can be verified. A cache hit receives the same
+review status rather than triggering needless repeat downloads.
+
+A confirmed `mismatch` is also retained in `identity_review/mismatch/`
+for inspection, but **is not accepted as that reference's PDF**.
+A source-derived filename prevents overwriting earlier evidence.
+
+The CLI reports `downloaded` (including reviewable candidates),
+`verified`, `needs_review`, `identity_mismatch`, and `missing`
+independently. Never interpret `downloaded` as `verified`.
 
 Review PDFs are **retained, not deleted**. Inspect evidence before relying
 on automated decisions; do not equate a 100% unit-test pass rate with a
