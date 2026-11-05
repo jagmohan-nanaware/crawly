@@ -6,6 +6,7 @@ module downloads a file or attempts to bypass a publisher's access policy.
 
 from __future__ import annotations
 
+import json
 import math
 import re
 import sqlite3
@@ -152,6 +153,16 @@ class SourceRegistry:
                     PRIMARY KEY(reference_id, url)
                 )
             """)
+            db.execute("""
+                CREATE TABLE IF NOT EXISTS identity_checks (
+                    reference_id TEXT NOT NULL,
+                    url TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    evidence_json TEXT NOT NULL,
+                    checked_utc TEXT NOT NULL,
+                    PRIMARY KEY (reference_id, url)
+                )
+            """)
 
     @contextmanager
     def _connect(self):
@@ -217,3 +228,33 @@ class SourceRegistry:
                   reference_id, url))
             if cur.rowcount == 0:
                 raise KeyError("Candidate source is not registered")
+
+    def record_identity_check(self, reference_id: str, url: str, status: str, evidence: dict) -> None:
+        """Persist an assessment and compact evidence next to the source attempt."""
+        if status not in {"verified", "needs_review", "mismatch"}:
+            raise ValueError("Unknown identity status")
+        with self._connect() as db:
+            db.execute("""
+                INSERT INTO identity_checks
+                    (reference_id, url, status, evidence_json, checked_utc)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(reference_id, url) DO UPDATE SET
+                    status=excluded.status,
+                    evidence_json=excluded.evidence_json,
+                    checked_utc=excluded.checked_utc
+            """, (reference_id, url, status, json.dumps(evidence, sort_keys=True),
+                  datetime.now(timezone.utc).isoformat()))
+
+    def list_identity_checks(self, reference_id: str) -> List[dict]:
+        """Return provenance and decisions for all checked sources of a reference."""
+        with self._connect() as db:
+            rows = db.execute("""
+                SELECT url, status, evidence_json, checked_utc
+                  FROM identity_checks WHERE reference_id = ?
+                 ORDER BY checked_utc, url
+            """, (reference_id,)).fetchall()
+        return [
+            {"url": row["url"], "status": row["status"],
+             "evidence": json.loads(row["evidence_json"]), "checked_utc": row["checked_utc"]}
+            for row in rows
+        ]
