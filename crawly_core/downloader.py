@@ -6,6 +6,7 @@ import csv
 import difflib
 import hashlib
 import json
+import os
 import re
 import urllib.parse
 from pathlib import Path
@@ -196,7 +197,18 @@ def _fetch_and_verify_pdf(
         "Accept": "application/pdf,application/octet-stream;q=0.9,*/*;q=0.8",
     }
     try:
-        resp = requests.get(url, headers=headers, timeout=timeout, allow_redirects=True, stream=True)
+        # Supply the optional archive key for this trusted host only, at
+        # request time. Never write secrets into the source registry or CSV.
+        content_params = (
+            {"api_key": os.environ["OPENALEX_API_KEY"]}
+            if url.startswith("https://content.openalex.org/works/")
+            and os.environ.get("OPENALEX_API_KEY") else None
+        )
+        request_args = {"params": content_params} if content_params else {}
+        resp = requests.get(
+            url, headers=headers, timeout=timeout,
+            allow_redirects=True, stream=True, **request_args,
+        )
         if resp.status_code != 200:
             note(http_outcome(resp.status_code))
             return False
@@ -444,6 +456,7 @@ def _download_from_registry(
     registry: SourceRegistry,
     blocked_hosts: set[str],
     custom_scihub_url: Optional[str],
+    blocked_providers: Optional[set[str]] = None,
 ) -> Tuple[bool, str, Optional[Path]]:
     """Try recorded sources first, then discover OA fallback sources.
 
@@ -516,18 +529,23 @@ def _download_from_registry(
     if first[0]:
         return first
 
-    resolve_paper_metadata(paper, timeout=cfg.request_timeout, config=cfg)
-    # The original metadata resolver may find a DOI yet no downloadable PDF.
-    # Independently search all OA copies, including title-only discovery.
-    discover_oa_sources(paper, cfg, registry, ref_id)
+    # Do not duplicate OpenAlex API calls through the legacy metadata
+    # resolver. Query the provider once, honoring batch-level HTTP 429.
+    discover_oa_sources(paper, cfg, registry, ref_id, blocked_providers)
+    # Crossref can still supply DOIs for works missed by both OA services.
+    if not paper.doi:
+        resolve_paper_metadata(
+            paper, timeout=cfg.request_timeout, config=cfg, skip_openalex=True,
+        )
     discovered = _candidate_publisher_oa_urls(paper)
     if paper.doi:
         discovered.extend(_candidate_unpaywall_urls(
             paper.doi, cfg.unpaywall_email, timeout=cfg.request_timeout, config=cfg
         ))
-        discovered.extend(_candidate_semantic_scholar_urls(
-            paper, api_key=cfg.semantic_scholar_api_key, timeout=cfg.request_timeout, config=cfg
-        ))
+        if blocked_providers is None or "Semantic Scholar" not in blocked_providers:
+            discovered.extend(_candidate_semantic_scholar_urls(
+                paper, api_key=cfg.semantic_scholar_api_key, timeout=cfg.request_timeout, config=cfg
+            ))
     discovered.extend(_candidate_europe_pmc_urls(
         paper, timeout=cfg.request_timeout, config=cfg
     ))
@@ -593,6 +611,7 @@ def download_paper_pdf(
     custom_scihub_url: Optional[str] = None,
     registry: Optional[SourceRegistry] = None,
     blocked_hosts: Optional[set[str]] = None,
+    blocked_providers: Optional[set[str]] = None,
 ) -> Tuple[bool, str, Optional[Path]]:
     cfg = config or AppConfig.load()
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -641,6 +660,7 @@ def download_paper_pdf(
             paper, target_path, cfg, registry,
             blocked_hosts if blocked_hosts is not None else set(),
             custom_scihub_url,
+            blocked_providers,
         )
 
     resolve_paper_metadata(paper, timeout=cfg.request_timeout, config=cfg)
@@ -706,9 +726,13 @@ def download_batch_pdfs(
 
     registry = SourceRegistry(cfg.source_registry_path or (out_path / "sources.sqlite")) if (cfg.use_source_registry or cfg.verify_pdf_identity) else None
     blocked_hosts: set[str] = set()
+    blocked_providers: set[str] = set()
     total = len(papers)
     for idx, paper in enumerate(papers, start=1):
-        kwargs = {"registry": registry, "blocked_hosts": blocked_hosts} if registry is not None else {}
+        kwargs = {
+            "registry": registry, "blocked_hosts": blocked_hosts,
+            "blocked_providers": blocked_providers,
+        } if registry is not None else {}
         ok, src, _ = download_paper_pdf(
             paper,
             output_dir=out_path,
