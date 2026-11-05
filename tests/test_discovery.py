@@ -219,6 +219,98 @@ class TestColdstartDiscovery(unittest.TestCase):
         self.assertEqual(len(self.registry.list_discovery_events("158")), 4)
         self.assertTrue(all(c.reference_id == "158" for c in self.registry.list_sources("158")))
 
+    def test_batch_rate_limit_stops_duplicate_provider_requests(self):
+        blocked = set()
+        with patch("crawly_core.discovery.requests.get", return_value=response(429)) as get:
+            self.assertIsNone(_get_json(
+                self.registry, "158", "Semantic Scholar",
+                "https://api.semanticscholar.org/graph/v1/paper/search",
+                {"query": TITLE}, self.cfg, blocked,
+            ))
+            self.assertIsNone(_get_json(
+                self.registry, "34", "Semantic Scholar",
+                "https://api.semanticscholar.org/graph/v1/paper/search",
+                {"query": "Some other paper"}, self.cfg, blocked,
+            ))
+        self.assertEqual(get.call_count, 1)
+        self.assertEqual(blocked, {"Semantic Scholar"})
+        self.assertEqual(
+            self.registry.list_discovery_events("34")[0]["outcome"],
+            "skipped_rate_limited",
+        )
+
+    def test_authenticated_headers_do_not_appear_in_registry(self):
+        self.cfg.semantic_scholar_api_key = "test-private-s2-key"
+        with patch("crawly_core.discovery.requests.get", return_value=response(200, {})) as get:
+            _get_json(
+                self.registry, "158", "Semantic Scholar", "https://api.example.org",
+                None, self.cfg,
+            )
+        self.assertEqual(get.call_args.kwargs["headers"]["x-api-key"], "test-private-s2-key")
+        with (
+            patch.dict("os.environ", {"OPENALEX_API_KEY": "test-private-openalex-key"}),
+            patch("crawly_core.discovery.requests.get", return_value=response(200, {})) as get,
+        ):
+            _get_json(self.registry, "158", "OpenAlex", "https://api.openalex.org/works",
+                      None, self.cfg)
+        self.assertEqual(get.call_args.kwargs["headers"]["Authorization"],
+                         "Bearer test-private-openalex-key")
+        events = self.registry.list_discovery_events("158")
+        self.assertNotIn("test-private", str(events))
+
+    def test_openalex_archive_requires_key_and_oa_document(self):
+        item = openalex_item()
+        item["has_content"] = {"pdf": True}
+        item["content_urls"] = {
+            "pdf": "https://content.openalex.org/works/W123.pdf",
+        }
+        item["open_access"]["is_oa"] = True
+        without_key = []
+        with patch.dict("os.environ", {"OPENALEX_API_KEY": ""}):
+            _add_openalex_locations(item, "158", without_key)
+        self.assertNotIn("https://content.openalex.org/works/W123.pdf",
+                         [p.url for p in without_key])
+        with patch.dict("os.environ", {"OPENALEX_API_KEY": "private-key"}):
+            with_key = []
+            _add_openalex_locations(item, "158", with_key)
+        self.assertIn("https://content.openalex.org/works/W123.pdf", [p.url for p in with_key])
+        self.assertEqual(
+            next(p.discovered_via for p in with_key if "content.openalex.org" in p.url),
+            "OpenAlex Archive",
+        )
+        self.assertNotIn("private-key", str(with_key))
+        item["open_access"]["is_oa"] = False
+        with patch.dict("os.environ", {"OPENALEX_API_KEY": "private-key"}):
+            not_open = []
+            _add_openalex_locations(item, "158", not_open)
+        self.assertNotIn("https://content.openalex.org/works/W123.pdf",
+                         [p.url for p in not_open])
+        item["open_access"]["is_oa"] = True
+        item["content_urls"]["pdf"] = "https://attacker.example.com/works/W123.pdf"
+        with patch.dict("os.environ", {"OPENALEX_API_KEY": "private-key"}):
+            bad_host = []
+            _add_openalex_locations(item, "158", bad_host)
+        self.assertNotIn("https://attacker.example.com/works/W123.pdf",
+                         [p.url for p in bad_host])
+
+    def test_openalex_archive_download_adds_key_only_for_trusted_host(self):
+        from crawly_core.downloader import _fetch_and_verify_pdf
+        output = Path(self.tmp.name) / "archive.pdf"
+        body = b"%PDF-1.7\\n" + b"0" * 2048
+        good = MagicMock(status_code=200, headers={"Content-Type": "application/pdf"})
+        good.iter_content.return_value = [body]
+        with (
+            patch.dict("os.environ", {"OPENALEX_API_KEY": "test-private-key"}),
+            patch("crawly_core.downloader.requests.get", return_value=good) as get,
+        ):
+            self.assertTrue(_fetch_and_verify_pdf(
+                "https://content.openalex.org/works/W123.pdf", output,
+                config=self.cfg,
+            ))
+            self.assertEqual(get.call_args.kwargs["params"], {"api_key": "test-private-key"})
+            _fetch_and_verify_pdf("https://other-repository.edu/paper.pdf", output, config=self.cfg)
+            self.assertNotIn("params", get.call_args.kwargs)
+
     def test_downloader_tries_discovered_oa_candidate_from_search(self):
         # Integration contract: a cold-start paper has no CSV PDF URL and yet
         # the registry gains a candidate before attempting fallback downloads.
