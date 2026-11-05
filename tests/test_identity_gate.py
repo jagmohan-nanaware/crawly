@@ -250,6 +250,26 @@ class TestBibliographicIdentity(unittest.TestCase):
         self.assertEqual(checks[0]["evidence"]["reason"], "title_and_author")
         self.assertTrue(checks[0]["checked_utc"].endswith("+00:00"))
 
+    def test_cli_verify_identity_implies_registry(self):
+        from crawly_core.cli import main
+        from crawly_core.models import save_papers_to_csv
+
+        csv_path = self.root / "sample.csv"
+        save_papers_to_csv([self.paper], csv_path)
+        with (
+            patch("crawly_core.cli.AppConfig.load", return_value=AppConfig(ai_provider="extractive")),
+            patch("crawly_core.cli.render_header"),
+            patch("crawly_core.cli.download_batch_pdfs",
+                  return_value={"total": 1, "downloaded": 0, "missing": 1}) as batch,
+        ):
+            self.assertEqual(main([
+                "download", str(csv_path), "--verify-identity",
+                "-o", str(self.root / "out"),
+            ]), 0)
+        cfg = batch.call_args.kwargs["config"]
+        self.assertTrue(cfg.use_source_registry)
+        self.assertTrue(cfg.verify_pdf_identity)
+
     def test_strict_scihub_fallback_is_also_identity_checked(self):
         cfg = AppConfig(verify_pdf_identity=True, use_scihub_fallback=True)
         with (
