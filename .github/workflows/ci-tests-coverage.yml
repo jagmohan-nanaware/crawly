@@ -51,8 +51,8 @@ jobs:
         id: check_coverage
         continue-on-error: true
         run: |
-          python -m coverage report -m --fail-under=100 > coverage_report.txt 2>&1
-          echo "cov_exit_code=$?" >> "$GITHUB_OUTPUT"
+          python -m coverage report -m --fail-under=100 > coverage_report.txt 2>&1 || cov_exit_code=$?
+          echo "cov_exit_code=${cov_exit_code:-0}" >> "$GITHUB_OUTPUT"
           cat coverage_report.txt
 
       - name: Publish Quality Gate Job Summary
