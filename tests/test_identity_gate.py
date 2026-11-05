@@ -91,6 +91,15 @@ class TestBibliographicIdentity(unittest.TestCase):
         make_pdf(path, self.title + " Steve Vestal", self.title, "Steve Vestal")
         self.assertEqual(assess_pdf_identity(self.paper, path).status, "needs_review")
 
+    def test_similar_variant_title_is_review_not_mismatch(self):
+        path = self.root / "minor_variant.pdf"
+        variant = "Preemptive scheduling of mixed criticality systems"
+        make_pdf(path, variant + " Steve Vestal 2007", variant, "Steve Vestal")
+        assessment = assess_pdf_identity(self.paper, path)
+        self.assertEqual(assessment.status, "needs_review")
+        self.assertFalse(assessment.evidence["metadata_title_conflict"])
+        self.assertGreater(assessment.evidence["metadata_title_similarity"], 0.50)
+
     def test_mismatch_on_authoritative_title_or_header_doi(self):
         path = self.root / "wrong.pdf"
         wrong = "A different scientific paper about automotive testing"
