@@ -16,6 +16,7 @@ from bs4 import BeautifulSoup
 
 from .models import DEFAULT_API_ENDPOINTS, AppConfig, Paper, save_papers_to_csv
 from .identity import assess_pdf_identity
+from .discovery import discover_oa_sources
 from .source_registry import CandidateSource, SourceRegistry, is_excluded_reference
 from .sources import get_browser_headers, get_polite_headers, normalize_doi, reconstruct_openalex_abstract
 
@@ -516,6 +517,9 @@ def _download_from_registry(
         return first
 
     resolve_paper_metadata(paper, timeout=cfg.request_timeout, config=cfg)
+    # The original metadata resolver may find a DOI yet no downloadable PDF.
+    # Independently search all OA copies, including title-only discovery.
+    discover_oa_sources(paper, cfg, registry, ref_id)
     discovered = _candidate_publisher_oa_urls(paper)
     if paper.doi:
         discovered.extend(_candidate_unpaywall_urls(
