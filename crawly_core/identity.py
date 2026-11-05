@@ -6,6 +6,7 @@ Only text extraction and embedded metadata are used: no network/LLM/OCR.
 
 from __future__ import annotations
 
+import difflib
 import re
 import unicodedata
 from dataclasses import dataclass
@@ -81,11 +82,12 @@ def assess_pdf_identity(paper: Paper, path: str | Path) -> IdentityAssessment:
     # Restrict contradictory-title evidence to a meaningful embedded title
     # also explicitly visible in the document's first-page heading area.
     actual_title = _normalize(embedded_title)
+    title_similarity = difflib.SequenceMatcher(None, title, actual_title).ratio() if actual_title else 0.0
     metadata_conflict = bool(
         len(actual_title) >= 20
         and actual_title in _normalize(first[:2500])
         and not title_found
-        and title != actual_title
+        and title_similarity < 0.50
     )
     doi_conflict = bool(expected_doi and found_doi and found_doi != expected_doi)
     evidence: Dict[str, object] = {
@@ -95,6 +97,7 @@ def assess_pdf_identity(paper: Paper, path: str | Path) -> IdentityAssessment:
         "expected_first_author": author,
         "pdf_metadata_title": embedded_title[:240],
         "pdf_metadata_author": embedded_author[:240],
+        "metadata_title_similarity": round(title_similarity, 3),
         "header_doi": found_doi,
         "title_found": title_found,
         "author_found": author_found,
