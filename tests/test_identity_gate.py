@@ -205,6 +205,27 @@ class TestBibliographicIdentity(unittest.TestCase):
         self.assertEqual(registry.list_sources("753")[0].last_outcome, "pdf_received")
         self.assertEqual(registry.list_identity_checks("753")[0]["status"], "needs_review")
 
+    def test_strict_rerun_clears_stale_success_from_csv(self):
+        self.paper.extra_fields["PDF Identity Status"] = "verified"
+        self.paper.extra_fields["PDF Identity Evidence"] = '{"old": true}'
+        self.paper.local_pdf = "/old/location/incorrect.pdf"
+        self.paper.download_source = "Old source"
+        with (
+            patch("crawly_core.downloader._fetch_and_verify_pdf", return_value=False),
+            patch("crawly_core.downloader.resolve_paper_metadata"),
+            patch("crawly_core.downloader._candidate_unpaywall_urls", return_value=[]),
+            patch("crawly_core.downloader._candidate_semantic_scholar_urls", return_value=[]),
+            patch("crawly_core.downloader._candidate_europe_pmc_urls", return_value=[]),
+        ):
+            result = download_paper_pdf(
+                self.paper, self.root / "pdfs", AppConfig(verify_pdf_identity=True),
+            )
+        self.assertFalse(result[0])
+        self.assertNotIn("PDF Identity Status", self.paper.extra_fields)
+        self.assertNotIn("PDF Identity Evidence", self.paper.extra_fields)
+        self.assertEqual(self.paper.local_pdf, "")
+        self.assertEqual(self.paper.download_source, "")
+
     def test_cached_file_must_be_verified_in_strict_mode(self):
         target_dir = self.root / "pdfs"
         target_dir.mkdir()
