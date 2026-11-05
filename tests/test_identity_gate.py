@@ -252,7 +252,7 @@ class TestBibliographicIdentity(unittest.TestCase):
         self.assertEqual(len(archived), 1)
         self.assertEqual(Path(self.paper.local_pdf), archived[0])
         self.assertTrue(archived[0].exists())
-        self.assertIn("Needs Review", stats)
+        self.assertTrue(any(key.startswith("Needs Review:") for key in stats))
         registry = SourceRegistry(self.root / "pdfs" / "sources.sqlite")
         self.assertEqual(registry.list_sources("753")[0].last_outcome, "pdf_received")
         self.assertEqual(registry.list_identity_checks("753")[0]["status"], "needs_review")
