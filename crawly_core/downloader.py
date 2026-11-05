@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import csv
 import difflib
+import hashlib
+import json
+import os
 import re
 import urllib.parse
 from pathlib import Path
@@ -13,6 +16,9 @@ import requests
 from bs4 import BeautifulSoup
 
 from .models import DEFAULT_API_ENDPOINTS, AppConfig, Paper, save_papers_to_csv
+from .identity import assess_pdf_identity
+from .discovery import discover_oa_sources
+from .source_registry import CandidateSource, SourceRegistry, is_excluded_reference
 from .sources import get_browser_headers, get_polite_headers, normalize_doi, reconstruct_openalex_abstract
 
 
@@ -44,7 +50,10 @@ def extract_doi_from_text_or_url(text: str) -> str:
     return normalize_doi(doi)
 
 
-def resolve_paper_metadata(paper: Paper, timeout: int = 10, config: Optional[AppConfig] = None) -> Paper:
+def resolve_paper_metadata(
+    paper: Paper, timeout: int = 10, config: Optional[AppConfig] = None,
+    skip_openalex: bool = False,
+) -> Paper:
     cfg = config or AppConfig.load()
     if not paper.doi:
         paper.doi = extract_doi_from_text_or_url(paper.url) or extract_doi_from_text_or_url(paper.title)
@@ -55,7 +64,7 @@ def resolve_paper_metadata(paper: Paper, timeout: int = 10, config: Optional[App
     polite_hdrs = get_polite_headers(cfg)
 
     try:
-        if paper.doi:
+        if not skip_openalex and paper.doi:
             oa_api = f"{oa_base}/https://doi.org/{urllib.parse.quote(paper.doi, safe='/')}"
             r = requests.get(oa_api, headers=polite_hdrs, timeout=timeout)
             if r.status_code == 200:
@@ -70,7 +79,7 @@ def resolve_paper_metadata(paper: Paper, timeout: int = 10, config: Optional[App
                     paper.abstract = reconstruct_openalex_abstract(item.get("abstract_inverted_index"))
                 if not paper.citations and item.get("cited_by_count"):
                     paper.citations = int(item["cited_by_count"])
-        if not paper.doi and clean_t:
+        if not skip_openalex and not paper.doi and clean_t:
             r = requests.get(
                 oa_base,
                 params={"search": clean_t, "per-page": 3},
@@ -163,8 +172,27 @@ def _fetch_and_verify_pdf(
     target_path: Path,
     timeout: int = 20,
     config: Optional[AppConfig] = None,
+    status_callback: Optional[Callable[[str], None]] = None,
 ) -> bool:
+    """Retrieve PDF bytes; report transport status separately from paper identity.
+
+    A successful PDF signature check means only 'pdf_received', never
+    'verified'. Title/author/DOI identity verification is a separate gate.
+    """
+    def note(outcome: str) -> None:
+        if status_callback is not None:
+            status_callback(outcome)
+
+    def http_outcome(code: int) -> str:
+        return {
+            401: "authentication_required",
+            403: "access_denied",
+            404: "not_found",
+            429: "rate_limited",
+        }.get(code, "download_error")
+
     if not url or not url.startswith(("http://", "https://")):
+        note("download_error")
         return False
     cfg = config or AppConfig.load()
     headers = {
@@ -172,8 +200,20 @@ def _fetch_and_verify_pdf(
         "Accept": "application/pdf,application/octet-stream;q=0.9,*/*;q=0.8",
     }
     try:
-        resp = requests.get(url, headers=headers, timeout=timeout, allow_redirects=True, stream=True)
+        # Supply the optional archive key for this trusted host only, at
+        # request time. Never write secrets into the source registry or CSV.
+        content_params = (
+            {"api_key": os.environ["OPENALEX_API_KEY"]}
+            if url.startswith("https://content.openalex.org/works/")
+            and os.environ.get("OPENALEX_API_KEY") else None
+        )
+        request_args = {"params": content_params} if content_params else {}
+        resp = requests.get(
+            url, headers=headers, timeout=timeout,
+            allow_redirects=True, stream=True, **request_args,
+        )
         if resp.status_code != 200:
+            note(http_outcome(resp.status_code))
             return False
 
         chunks = []
@@ -194,6 +234,7 @@ def _fetch_and_verify_pdf(
         if 0 <= pdf_idx <= 1024 and len(content) > 1024:
             target_path.parent.mkdir(parents=True, exist_ok=True)
             target_path.write_bytes(content[pdf_idx:])
+            note("pdf_received")
             return True
 
         ctype = (resp.headers.get("Content-Type") or "").lower()
@@ -212,9 +253,15 @@ def _fetch_and_verify_pdf(
                     if 0 <= idx2 <= 1024 and len(resp2.content) > 1024:
                         target_path.parent.mkdir(parents=True, exist_ok=True)
                         target_path.write_bytes(resp2.content[idx2:])
+                        note("pdf_received")
                         return True
+                else:
+                    note(http_outcome(resp2.status_code))
+                    return False
     except Exception:
+        note("download_error")
         return False
+    note("download_error")
     return False
 
 
@@ -359,14 +406,229 @@ def _try_scihub_download(
     return None
 
 
+
+
+def _identity_check_and_archive(
+    paper: Paper,
+    target_path: Path,
+    url: str,
+    registry: Optional[SourceRegistry],
+    reference_id: str,
+) -> str:
+    """Keep unverified PDFs out of the accepted directory while retaining evidence."""
+    assessment = assess_pdf_identity(paper, target_path)
+    evidence = dict(assessment.evidence)
+    if assessment.status != "verified":
+        if evidence.get("reason") == "pdf_text_unavailable":
+            review_reason = "PDF text could not be extracted; inspect the candidate manually"
+        elif assessment.status == "mismatch":
+            review_reason = "Conflicting PDF title or DOI; inspect the candidate manually"
+        else:
+            missing = []
+            if not evidence.get("title_found"):
+                missing.append("title not matched")
+            if not evidence.get("author_found"):
+                missing.append("first author not matched")
+            if not (evidence.get("year_found") or evidence.get("doi_found")):
+                missing.append("year and DOI not confirmed")
+            review_reason = "; ".join(missing) or "Bibliographic evidence insufficient"
+        evidence["review_reason"] = review_reason
+        archive_dir = target_path.parent / "identity_review" / assessment.status
+        archive_dir.mkdir(parents=True, exist_ok=True)
+        digest = hashlib.sha256(url.encode("utf-8")).hexdigest()[:10]
+        basename = f"{target_path.stem}--{digest}"
+        archived = archive_dir / f"{basename}.pdf"
+        index = 1
+        while archived.exists():
+            archived = archive_dir / f"{basename}-{index}.pdf"
+            index += 1
+        target_path.replace(archived)
+        evidence["review_pdf_path"] = str(archived)
+    paper.extra_fields["PDF Identity Status"] = assessment.status
+    paper.extra_fields["PDF Identity Evidence"] = json.dumps(evidence, sort_keys=True)
+    paper.extra_fields["PDF Review Reason"] = evidence.get("review_reason", "")
+    if registry is not None and url != "local-cache":
+        registry.record_identity_check(reference_id, url, assessment.status, evidence)
+    return assessment.status
+
+
+def _download_from_registry(
+    paper: Paper,
+    target_path: Path,
+    cfg: AppConfig,
+    registry: SourceRegistry,
+    blocked_hosts: set[str],
+    custom_scihub_url: Optional[str],
+    blocked_providers: Optional[set[str]] = None,
+) -> Tuple[bool, str, Optional[Path]]:
+    """Try recorded sources first, then discover OA fallback sources.
+
+    PDF byte validation is distinct from bibliographic identity checks.
+    The strict gate runs only when cfg.verify_pdf_identity is enabled.
+    """
+    ref_id = (paper.extra_fields.get("MCS Ref No") or paper.doi or paper.clean_title()).strip()
+    registry.import_paper(paper)
+    tried: set[str] = set()
+    # A reviewable PDF is still an acquired candidate. Keep the first one
+    # available while trying to find a bibliographically verified alternative.
+    review_candidate: Optional[Tuple[str, str, str, str]] = None
+
+    def remember_review(source_label: str) -> None:
+        nonlocal review_candidate
+        if review_candidate is None:
+            evidence_json = paper.extra_fields["PDF Identity Evidence"]
+            evidence = json.loads(evidence_json)
+            review_candidate = (
+                evidence["review_pdf_path"],
+                source_label,
+                evidence_json,
+                paper.extra_fields["PDF Review Reason"],
+            )
+
+    def try_sources(include_landing: bool = False) -> Tuple[bool, str, Optional[Path]]:
+        for candidate in registry.list_sources(ref_id):
+            # A publisher landing page can expose an access barrier. Prefer
+            # official OA metadata discovery before requesting landing pages.
+            if candidate.source_type == "landing_page" and not include_landing:
+                continue
+            if candidate.url in tried:
+                continue
+            host = urllib.parse.urlparse(candidate.url).hostname or ""
+            if host.lower() in blocked_hosts:
+                continue
+            tried.add(candidate.url)
+            outcomes: List[str] = []
+            ok = _fetch_and_verify_pdf(
+                candidate.url,
+                target_path,
+                timeout=cfg.request_timeout + 8,
+                config=cfg,
+                status_callback=outcomes.append,
+            )
+            outcome = outcomes[-1] if outcomes else ("pdf_received" if ok else "download_error")
+            accepted = ok
+            if ok and cfg.verify_pdf_identity:
+                decision = _identity_check_and_archive(
+                    paper, target_path, candidate.url, registry, ref_id,
+                )
+                outcome = "verified" if decision == "verified" else (
+                    "identity_mismatch" if decision == "mismatch" else "pdf_received"
+                )
+                accepted = decision == "verified"
+                if decision == "needs_review":
+                    label = candidate.discovered_via if candidate.discovered_via != "csv" else candidate.source_type
+                    remember_review(f"Registry: {label}")
+            registry.record_attempt(ref_id, candidate.url, outcome)
+            if outcome in ("rate_limited", "access_denied", "authentication_required"):
+                blocked_hosts.add(host.lower())
+            if accepted:
+                paper.local_pdf = str(target_path)
+                label = candidate.discovered_via if candidate.discovered_via != "csv" else candidate.source_type
+                paper.download_source = f"Registry: {label}"
+                return True, paper.download_source, target_path
+        return False, "Not Found", None
+
+    first = try_sources()
+    if first[0]:
+        return first
+
+    # Do not duplicate OpenAlex API calls through the legacy metadata
+    # resolver. Query the provider once, honoring batch-level HTTP 429.
+    discover_oa_sources(paper, cfg, registry, ref_id, blocked_providers)
+    # Crossref can still supply DOIs for works missed by both OA services.
+    if not paper.doi:
+        resolve_paper_metadata(
+            paper, timeout=cfg.request_timeout, config=cfg, skip_openalex=True,
+        )
+    discovered = _candidate_publisher_oa_urls(paper)
+    if paper.doi:
+        discovered.extend(_candidate_unpaywall_urls(
+            paper.doi, cfg.unpaywall_email, timeout=cfg.request_timeout, config=cfg
+        ))
+        if blocked_providers is None or "Semantic Scholar" not in blocked_providers:
+            discovered.extend(_candidate_semantic_scholar_urls(
+                paper, api_key=cfg.semantic_scholar_api_key, timeout=cfg.request_timeout, config=cfg
+            ))
+    discovered.extend(_candidate_europe_pmc_urls(
+        paper, timeout=cfg.request_timeout, config=cfg
+    ))
+
+    known_urls = {source.url for source in registry.list_sources(ref_id)}
+    for label, url in discovered:
+        if not url or url in known_urls:
+            continue
+        registry.upsert(CandidateSource(
+            reference_id=ref_id, url=url,
+            source_type="discovered_oa", discovered_via=label,
+        ))
+        known_urls.add(url)
+
+    second = try_sources(include_landing=True)
+    if second[0]:
+        return second
+
+    if cfg.use_scihub_fallback or custom_scihub_url:
+        mirrors = list(cfg.scihub_mirrors)
+        if custom_scihub_url:
+            clean_m = custom_scihub_url.strip().rstrip("/")
+            if clean_m and clean_m not in mirrors:
+                mirrors.insert(0, clean_m)
+        source = _try_scihub_download(
+            paper, target_path, mirrors=mirrors,
+            timeout=cfg.request_timeout + 8, config=cfg,
+        )
+        if source:
+            if cfg.verify_pdf_identity:
+                decision = _identity_check_and_archive(
+                    paper, target_path, source, None, ref_id,
+                )
+                if decision == "verified":
+                    paper.local_pdf = str(target_path)
+                    paper.download_source = source
+                    return True, source, target_path
+                if decision == "needs_review":
+                    remember_review(source)
+            else:
+                paper.local_pdf = str(target_path)
+                paper.download_source = source
+                return True, source, target_path
+
+    if review_candidate is not None:
+        review_path, review_source, evidence_json, review_reason = review_candidate
+        paper.local_pdf = review_path
+        paper.download_source = review_source
+        paper.extra_fields["PDF Identity Status"] = "needs_review"
+        paper.extra_fields["PDF Identity Evidence"] = evidence_json
+        paper.extra_fields["PDF Review Reason"] = review_reason
+        return True, f"Needs Review: {review_source}", Path(review_path)
+
+    if cfg.verify_pdf_identity and paper.extra_fields.get("PDF Identity Status") == "mismatch":
+        return False, "Identity Mismatch", None
+    return False, "Not Found", None
+
+
 def download_paper_pdf(
     paper: Paper,
     output_dir: Path,
     config: Optional[AppConfig] = None,
     custom_scihub_url: Optional[str] = None,
+    registry: Optional[SourceRegistry] = None,
+    blocked_hosts: Optional[set[str]] = None,
+    blocked_providers: Optional[set[str]] = None,
 ) -> Tuple[bool, str, Optional[Path]]:
     cfg = config or AppConfig.load()
     output_dir.mkdir(parents=True, exist_ok=True)
+    if (cfg.verify_pdf_identity or cfg.use_source_registry) and registry is None:
+        registry = SourceRegistry(cfg.source_registry_path or (output_dir / "sources.sqlite"))
+    if registry is not None and is_excluded_reference(paper):
+        return False, "Excluded document type", None
+    if cfg.verify_pdf_identity:
+        # An earlier run's CSV success must not survive a failed revalidation.
+        paper.extra_fields.pop("PDF Identity Status", None)
+        paper.extra_fields.pop("PDF Identity Evidence", None)
+        paper.extra_fields.pop("PDF Review Reason", None)
+        paper.local_pdf = ""
+        paper.download_source = ""
     target_path = output_dir / paper.safe_filename()
 
     if target_path.exists() and target_path.stat().st_size > 1024:
@@ -374,11 +636,35 @@ def download_paper_pdf(
             with target_path.open("rb") as fh:
                 head = fh.read(1024)
             if b"%PDF-" in head:
-                paper.local_pdf = str(target_path)
-                paper.download_source = paper.download_source or "Local Cache"
-                return True, paper.download_source, target_path
+                if cfg.verify_pdf_identity:
+                    reference_id = (paper.extra_fields.get("MCS Ref No") or paper.doi or paper.clean_title()).strip()
+                    decision = _identity_check_and_archive(
+                        paper, target_path, "local-cache", None, reference_id,
+                    )
+                    if decision == "verified":
+                        paper.local_pdf = str(target_path)
+                        paper.download_source = paper.download_source or "Local Cache"
+                        return True, paper.download_source, target_path
+                    if decision == "needs_review":
+                        review_path = Path(json.loads(paper.extra_fields["PDF Identity Evidence"])["review_pdf_path"])
+                        paper.local_pdf = str(review_path)
+                        paper.download_source = "Local Cache"
+                        return True, "Needs Review: Local Cache", review_path
+                    paper.local_pdf = ""
+                else:
+                    paper.local_pdf = str(target_path)
+                    paper.download_source = paper.download_source or "Local Cache"
+                    return True, paper.download_source, target_path
         except Exception:
             pass
+
+    if registry is not None:
+        return _download_from_registry(
+            paper, target_path, cfg, registry,
+            blocked_hosts if blocked_hosts is not None else set(),
+            custom_scihub_url,
+            blocked_providers,
+        )
 
     resolve_paper_metadata(paper, timeout=cfg.request_timeout, config=cfg)
 
@@ -438,19 +724,30 @@ def download_batch_pdfs(
 
     downloaded = 0
     not_found_rows: List[Dict[str, str]] = []
+    skipped = 0
     by_source: Dict[str, int] = {}
 
+    registry = SourceRegistry(cfg.source_registry_path or (out_path / "sources.sqlite")) if (cfg.use_source_registry or cfg.verify_pdf_identity) else None
+    blocked_hosts: set[str] = set()
+    blocked_providers: set[str] = set()
     total = len(papers)
     for idx, paper in enumerate(papers, start=1):
+        kwargs = {
+            "registry": registry, "blocked_hosts": blocked_hosts,
+            "blocked_providers": blocked_providers,
+        } if registry is not None else {}
         ok, src, _ = download_paper_pdf(
             paper,
             output_dir=out_path,
             config=cfg,
             custom_scihub_url=custom_scihub_url,
+            **kwargs,
         )
         if ok:
             downloaded += 1
             by_source[src] = by_source.get(src, 0) + 1
+        elif src == "Excluded document type" and registry is not None:
+            skipped += 1
         else:
             not_found_rows.append(
                 {
@@ -474,12 +771,19 @@ def download_batch_pdfs(
         except Exception:
             pass
 
-    return {
+    stats = {
         "total": total,
         "downloaded": downloaded,
-        "missing": total - downloaded,
+        "missing": len(not_found_rows),
         **by_source,
     }
+    if registry is not None:
+        stats["skipped"] = skipped
+    if cfg.verify_pdf_identity:
+        stats["verified"] = sum(p.extra_fields.get("PDF Identity Status") == "verified" for p in papers)
+        stats["needs_review"] = sum(p.extra_fields.get("PDF Identity Status") == "needs_review" for p in papers)
+        stats["identity_mismatch"] = sum(p.extra_fields.get("PDF Identity Status") == "mismatch" for p in papers)
+    return stats
 
 
 def sync_dataset_to_zotero(
