@@ -549,6 +549,8 @@ def download_paper_pdf(
 ) -> Tuple[bool, str, Optional[Path]]:
     cfg = config or AppConfig.load()
     output_dir.mkdir(parents=True, exist_ok=True)
+    if cfg.verify_pdf_identity and registry is None:
+        registry = SourceRegistry(cfg.source_registry_path or (output_dir / "sources.sqlite"))
     if registry is not None and is_excluded_reference(paper):
         return False, "Excluded document type", None
     target_path = output_dir / paper.safe_filename()
@@ -558,9 +560,20 @@ def download_paper_pdf(
             with target_path.open("rb") as fh:
                 head = fh.read(1024)
             if b"%PDF-" in head:
-                paper.local_pdf = str(target_path)
-                paper.download_source = paper.download_source or "Local Cache"
-                return True, paper.download_source, target_path
+                if cfg.verify_pdf_identity:
+                    reference_id = (paper.extra_fields.get("MCS Ref No") or paper.doi or paper.clean_title()).strip()
+                    decision = _identity_check_and_archive(
+                        paper, target_path, "local-cache", None, reference_id,
+                    )
+                    if decision == "verified":
+                        paper.local_pdf = str(target_path)
+                        paper.download_source = paper.download_source or "Local Cache"
+                        return True, paper.download_source, target_path
+                    paper.local_pdf = ""
+                else:
+                    paper.local_pdf = str(target_path)
+                    paper.download_source = paper.download_source or "Local Cache"
+                    return True, paper.download_source, target_path
         except Exception:
             pass
 
@@ -632,7 +645,7 @@ def download_batch_pdfs(
     skipped = 0
     by_source: Dict[str, int] = {}
 
-    registry = SourceRegistry(cfg.source_registry_path or (out_path / "sources.sqlite")) if cfg.use_source_registry else None
+    registry = SourceRegistry(cfg.source_registry_path or (out_path / "sources.sqlite")) if (cfg.use_source_registry or cfg.verify_pdf_identity) else None
     blocked_hosts: set[str] = set()
     total = len(papers)
     for idx, paper in enumerate(papers, start=1):
